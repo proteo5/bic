@@ -21,7 +21,8 @@ impl Default for DecodeLimits {
     fn default() -> Self {
         Self {
             max_pixels: MAX_PIXELS,
-            max_alloc: 1 << 30,
+            // Same default as the `image` crate's decoders.
+            max_alloc: 512 << 20,
         }
     }
 }
@@ -65,7 +66,12 @@ pub fn encode_rgba(
     let native = native_stream(width, height, rgba, options)?;
     let packed = zstd::stream::encode_all(native.as_slice(), options.zstd_level)?;
     let native_file = container(width, height, STORAGE_NATIVE, native.len() as u64, &packed);
-    if options.png_fallback && options.quant_step == 1 && options.smooth_tolerance == 0 {
+    // PNG cannot represent an empty image, so those always stay native.
+    if options.png_fallback
+        && pixels > 0
+        && options.quant_step == 1
+        && options.smooth_tolerance == 0
+    {
         let png = png_bytes(width, height, rgba)?;
         if png.len() <= native_file.len() {
             return Ok(container(
@@ -501,6 +507,9 @@ fn read_u16(d: &[u8], a: &mut usize) -> Result<u16> {
 fn read_u32(d: &[u8], a: &mut usize) -> Result<u32> {
     Ok(u32::from_le_bytes(take(d, a, 4)?.try_into().unwrap()))
 }
+
+#[cfg(test)]
+mod proptests;
 
 #[cfg(test)]
 mod tests {

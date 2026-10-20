@@ -1,7 +1,7 @@
 mod bench;
 
 use anyhow::{ensure, Context, Result};
-use bic::{decode_rgba, encode_rgba, is_png_fallback, EncodeOptions};
+use bic::{decode_rgba_with_limits, encode_rgba, is_png_fallback, DecodeLimits, EncodeOptions};
 use clap::{Parser, Subcommand};
 use heic_rs::{DecodeOptions, PixelLayout};
 use minifb::{Key, Window, WindowOptions};
@@ -16,6 +16,9 @@ use std::{
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Decoder working-memory limit in MiB (decode, view, verify)
+    #[arg(long, global = true, default_value_t = 512)]
+    max_alloc_mib: usize,
 }
 
 #[derive(Subcommand)]
@@ -76,12 +79,17 @@ pub(crate) fn load(path: &Path) -> Result<image::RgbaImage> {
     Ok(image::load_from_memory(&data)?.to_rgba8())
 }
 
-fn view(path: &Path) -> Result<()> {
+fn read_bic(path: &Path, limits: DecodeLimits) -> Result<(u32, u32, Vec<u8>)> {
+    let file = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    decode_rgba_with_limits(&file, limits).with_context(|| format!("decoding {}", path.display()))
+}
+
+fn view(path: &Path, limits: DecodeLimits) -> Result<()> {
     let (title, image) = if path
         .extension()
         .is_some_and(|x| x.eq_ignore_ascii_case("bic"))
     {
-        let (w, h, p) = decode_rgba(&fs::read(path)?)?;
+        let (w, h, p) = read_bic(path, limits)?;
         (
             format!("BIC viewer — {}", path.display()),
             image::RgbaImage::from_raw(w, h, p).context("invalid BIC image")?,
@@ -146,7 +154,12 @@ fn install_association() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    let limits = DecodeLimits {
+        max_alloc: cli.max_alloc_mib.saturating_mul(1 << 20),
+        ..Default::default()
+    };
+    match cli.command {
         Command::Encode {
             input,
             output,
@@ -181,14 +194,16 @@ fn main() -> Result<()> {
             );
         }
         Command::Decode { input, output } => {
-            let f = fs::read(input)?;
-            let (w, h, p) = decode_rgba(&f)?;
-            image::RgbaImage::from_raw(w, h, p).unwrap().save(output)?;
+            let (w, h, p) = read_bic(&input, limits)?;
+            image::RgbaImage::from_raw(w, h, p)
+                .context("decoded size mismatch")?
+                .save(&output)
+                .with_context(|| format!("writing {}", output.display()))?;
         }
-        Command::View { input } => view(&input)?,
+        Command::View { input } => view(&input, limits)?,
         Command::Verify { input, bic } => {
             let original = load(&input)?;
-            let (w, h, p) = decode_rgba(&fs::read(bic)?)?;
+            let (w, h, p) = read_bic(&bic, limits)?;
             ensure!(
                 w == original.width() && h == original.height() && p == *original.as_raw(),
                 "roundtrip pixels differ"

@@ -128,7 +128,7 @@ use bic::{decode_rgba, decode_rgba_with_limits, encode_rgba, DecodeLimits, Encod
 fn roundtrip(width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<()> {
     let file = encode_rgba(width, height, rgba, EncodeOptions::default())?;
 
-    // Default limits: 100 M pixels, 1 GiB working memory.
+    // Default limits: 100 M pixels, 512 MiB working memory.
     let (w, h, pixels) = decode_rgba(&file)?;
     assert_eq!((w, h, pixels.as_slice()), (width, height, rgba));
 
@@ -171,8 +171,8 @@ Decoding untrusted files is guarded by `DecodeLimits`:
 - Known malformed inputs, such as an inverted channel range, return errors
   instead of panicking.
 
-The decoder has not been fuzzed yet. Treat it as hardened prototype code, not
-as a security boundary.
+The decoder is fuzzed in CI (see [Fuzzing](#fuzzing)), but it is still prototype
+code. Do not treat it as a security boundary.
 
 ## Benchmarking
 
@@ -208,17 +208,40 @@ competitive on photographs yet. CI reruns the synthetic benchmark on every push.
 - [ ] Evaluate the RLE stage against plain Zstandard on predicted planes
 - [ ] Zigzag-coded `u8` residuals; store quantization indices
 - [x] Image corpus and regression benchmarks against PNG, oxipng, WebP lossless and QOI
-- [ ] Decoder fuzzing (`cargo-fuzz`) and property-based roundtrip tests
+- [x] Decoder fuzzing (`cargo-fuzz`) and property-based roundtrip tests
 - [ ] Viewer without a console window, with frame-rate limiting
 - [ ] EXIF orientation and ICC profile handling
 
 ## Development
 
 ```bash
-cargo test                    # unit tests
-cargo clippy --all-targets    # lints
-cargo fmt                     # formatting
+cargo test                          # unit and property-based tests
+PROPTEST_CASES=5000 cargo test      # longer property-based run
+cargo clippy --all-targets -- -D warnings
+cargo fmt
 ```
+
+### Fuzzing
+
+The `fuzz/` crate has three [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz)
+targets:
+
+| Target | Input |
+| --- | --- |
+| `decode` | Arbitrary bytes as a whole BIC file |
+| `decode_plain` | Arbitrary bytes as the plane stream, inside a valid container |
+| `roundtrip` | Arbitrary images and encoder options; checks exactness or the lossy error bound |
+
+```bash
+rustup toolchain install nightly
+cargo install cargo-fuzz
+cd fuzz
+cargo +nightly fuzz run decode_plain -- -max_total_time=300
+```
+
+On Windows (MSVC), the AddressSanitizer runtime must be on `PATH`, for example
+`VC\Tools\MSVC\<version>\bin\Hostx64\x64` from your Visual Studio
+installation. CI fuzzes each target for two minutes on every push.
 
 Issues and pull requests are welcome. Please include tests for codec changes
 and, for compression changes, before/after sizes on representative images.

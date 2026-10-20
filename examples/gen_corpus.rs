@@ -17,11 +17,18 @@ const MUTED: Rgba<u8> = Rgba([233, 236, 239, 255]);
 const BORDER: Rgba<u8> = Rgba([173, 181, 189, 255]);
 
 /// Small LCG so the corpus never depends on an external RNG's stability.
+/// The raw state's low bits repeat with short periods, which a predictor can
+/// exploit, so the output goes through an integer hash finalizer.
 struct Lcg(u32);
 impl Lcg {
     fn next(&mut self) -> u32 {
         self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        self.0 >> 8
+        let mut x = self.0;
+        x ^= x >> 16;
+        x = x.wrapping_mul(0x7feb_352d);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x846c_a68b);
+        x ^ (x >> 16)
     }
     fn below(&mut self, n: u32) -> u32 {
         self.next() % n

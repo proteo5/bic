@@ -30,18 +30,22 @@ it. Below 1.000 means BIC is smaller.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | chart | 800×600 | 11.4 | 1.3 | 0.8 | 14.8 | 2.4 | 1.882 |
 | control_gradient | 512×512 | 222.8 | 20.6 | 131.3 | 209.9 | 17.5 | 0.850 |
-| control_noise | 256×256 | 256.3 | 188.3 | 192.1 | 255.9 | 192.4 | 1.022 |
-| diagram | 1024×768 | 61.6 | 6.6 | 16.9 | 34.3 | 7.4 | 1.117 |
+| control_noise | 256×256 | 256.3 | 192.3 | 192.1 | 255.9 | 192.4 | 1.000 |
+| diagram | 1024×768 | 57.2 | 6.0 | 15.2 | 32.9 | 6.7 | 1.107 |
 | icon_alpha | 256×256 | 6.1 | 1.7 | 3.3 | 4.0 | 1.9 | 1.125 |
-| pixel_art | 320×240 | 7.9 | 1.3 | 3.0 | 16.5 | 3.1 | 2.467 |
-| ui_mock | 1280×800 | 191.6 | 16.9 | 52.9 | 84.1 | 24.0 | 1.423 |
+| pixel_art | 320×240 | 8.0 | 1.3 | 3.1 | 16.6 | 3.1 | 2.448 |
+| ui_mock | 1280×800 | 194.9 | 17.5 | 53.9 | 85.1 | 24.5 | 1.398 |
 
 | Baseline | Total KiB | BIC/total | BIC/geomean | BIC smaller |
 | --- | ---: | ---: | ---: | ---: |
-| PNG (image-rs) | 757.8 | 0.328 | 0.217 | 7/7 |
-| oxipng preset 2 | 236.6 | 1.051 | 1.326 | 1/7 |
-| WebP lossless (image-rs) | 400.4 | 0.621 | 0.646 | 4/7 |
-| QOI | 619.5 | 0.401 | 0.247 | 7/7 |
+| PNG (image-rs) | 756.7 | 0.328 | 0.216 | 7/7 |
+| oxipng preset 2 | 240.7 | 1.032 | 1.316 | 1/7 |
+| WebP lossless (image-rs) | 399.7 | 0.622 | 0.647 | 4/7 |
+| QOI | 619.2 | 0.401 | 0.245 | 7/7 |
+
+The corpus generator was corrected after the first recording. Its random
+source had short-period low bits that made the "noise" control partly
+predictable. The numbers above use the corrected generator.
 
 ### Private photo set
 
@@ -57,8 +61,8 @@ diagrams and a logo with transparency. The images are not published.
 
 ### Reading the baseline
 
-- On flat graphics BIC beats PNG (image-rs) and QOI. It is about 5 % larger
-  than oxipng by total size, but about 33 % larger by geometric mean.
+- On flat graphics BIC beats PNG (image-rs) and QOI. It is about 3 % larger
+  than oxipng by total size, but about 32 % larger by geometric mean.
 - On photographs BIC is the largest format measured. That is expected
   without spatial prediction: RLE and Zstandard find almost no exact repeats
   in camera noise.

@@ -58,10 +58,11 @@ predictors, palettes, animation, color profiles, or progressive decoding.
 ## Decoder limits
 
 Before allocating, the decoder checks the declared size against a caller-set
-`DecodeLimits` (defaults: 100,000,000 pixels and 1 GiB of working memory). The
+`DecodeLimits` (defaults: 100,000,000 pixels and 512 MiB of working memory). The
 native path needs about `7 × pixels + plain_len` bytes. Zstandard output is
 capped at `plain_len`, so a payload that inflates further is rejected rather
 than decompressed. PNG fallback payloads are decoded with the header's
-dimensions as hard limits. The decoder has not been fuzzed.
+dimensions as hard limits. The decoder is covered by property-based tests and
+cargo-fuzz targets (see `fuzz/`).
 Benchmarks must compare both size and encode/decode time against a defined PNG
 configuration; no compression-superiority claim follows from this prototype.

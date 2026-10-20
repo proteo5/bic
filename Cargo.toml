@@ -20,4 +20,5 @@ zstd = "0.13"
 oxipng = { version = "10.2.1", default-features = false, features = ["parallel"] }
 
 [dev-dependencies]
+proptest = "1"
 tempfile = "3.13"
