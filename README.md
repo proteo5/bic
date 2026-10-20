@@ -58,8 +58,9 @@ as a library and a command-line tool with a small native viewer.
   **File > Save as BIC** (Ctrl+S) converts the current one to a lossless `.bic`
   in the background, keeping its ICC profile. It runs without a console
   window, opens on double-click through a Windows file association, shows
-  transparency over a checkerboard, keeps proportions when resized, and
-  reports errors in a dialog.
+  transparency over a checkerboard, and reports errors in a dialog. Images are
+  scaled to the window with smooth resampling (Lanczos3 and Catmull-Rom),
+  keeping proportions and never above 100 %.
 
 ## Installation
 
@@ -229,8 +230,6 @@ photographs. CI reruns the synthetic benchmark on every push.
 - 8-bit RGBA only. 16-bit images are reduced to 8 bits on load.
 - One color transform (subtract green).
 - ICC profiles are stored but not applied: the viewer shows raw RGB values.
-- The viewer window keeps its first size; images of another shape opened
-  later are letterboxed.
 - Decoding to formats other than PNG drops the ICC profile, and JPEG output
   drops transparency.
 - Other EXIF metadata (camera, GPS, dates) is not kept.

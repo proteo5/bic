@@ -9,7 +9,7 @@
 use crate::load::{self, EXTENSIONS};
 use anyhow::{Context, Result};
 use bic::{decode_with_metadata, encode_rgba_with_metadata, DecodeLimits, EncodeOptions, Metadata};
-use image::RgbaImage;
+use image::{imageops::FilterType, RgbaImage};
 use minifb::{Key, KeyRepeat, Menu, ScaleMode, Window, WindowOptions, MENU_KEY_CTRL};
 use std::{
     fs,
@@ -22,14 +22,24 @@ const MAX_WINDOW: (f32, f32) = (1600.0, 1000.0);
 const FPS: usize = 30;
 const CHECKER: usize = 8;
 const CHECKER_SHADES: [u32; 2] = [0x2c, 0x3c];
+/// Window area around the image.
+const BACKGROUND: u32 = 0x1e1e1e;
 const MENU_OPEN: usize = 1;
 const MENU_SAVE: usize = 2;
 
-/// The image on screen: full resolution for saving, plus the scaled buffer.
+/// The image on screen: full resolution for saving and for large windows,
+/// plus a high-quality preview that fits the screen, from which smaller
+/// window sizes are rendered quickly.
 struct Shown {
     path: PathBuf,
     image: RgbaImage,
+    preview: RgbaImage,
     metadata: Metadata,
+}
+
+/// What was last drawn, at exactly the window's size, so minifb never has to
+/// scale it (its scaling skips pixels and makes photos look broken).
+struct Frame {
     buffer: Vec<u32>,
     size: (usize, usize),
 }
@@ -69,18 +79,20 @@ pub fn view(path: Option<&Path>, limits: DecodeLimits) -> Result<()> {
         },
     };
     let mut current = show(&first, limits)?;
+    let (pw, ph) = current.preview.dimensions();
     let mut window = Window::new(
         &title(&current, None),
-        current.size.0,
-        current.size.1,
+        pw as usize,
+        ph as usize,
         WindowOptions {
             resize: true,
-            // Keep proportions when the window is resized, and for images
-            // opened later whose shape differs from the window.
-            scale_mode: ScaleMode::AspectRatioStretch,
+            // Frames are rendered at the window's size; this only matters
+            // for the moment between a resize and the next frame.
+            scale_mode: ScaleMode::Center,
             ..Default::default()
         },
     )?;
+    let mut frame = render_frame(&current, window.get_size());
     // The image only changes on user action, so a low frame rate keeps the
     // CPU idle.
     window.set_target_fps(FPS);
@@ -112,6 +124,7 @@ pub fn view(path: Option<&Path>, limits: DecodeLimits) -> Result<()> {
                     match show(&path, limits) {
                         Ok(shown) => {
                             current = shown;
+                            frame = render_frame(&current, window.get_size());
                             window.set_title(&title(&current, None));
                         }
                         Err(e) => {
@@ -148,7 +161,11 @@ pub fn view(path: Option<&Path>, limits: DecodeLimits) -> Result<()> {
                 }
             }
         }
-        window.update_with_buffer(&current.buffer, current.size.0, current.size.1)?;
+        let size = window.get_size();
+        if size != frame.size && size.0 > 0 && size.1 > 0 {
+            frame = render_frame(&current, size);
+        }
+        window.update_with_buffer(&frame.buffer, frame.size.0, frame.size.1)?;
     }
     // Let a save in progress finish rather than abandon it on exit.
     if let Some(s) = saving {
@@ -171,43 +188,76 @@ pub fn error_dialog(message: &str) {
 
 fn show(path: &Path, limits: DecodeLimits) -> Result<Shown> {
     let (image, metadata) = open(path, limits)?;
-    let (buffer, size) = render(&image);
+    let preview = fit(
+        &image,
+        MAX_WINDOW.0 as u32,
+        MAX_WINDOW.1 as u32,
+        FilterType::Lanczos3,
+    );
     Ok(Shown {
         path: path.to_path_buf(),
         image,
+        preview,
         metadata,
-        buffer,
-        size,
     })
 }
 
-/// Scales the image to fit the screen area and composes transparency over a
-/// checkerboard.
-fn render(image: &RgbaImage) -> (Vec<u32>, (usize, usize)) {
-    let (iw, ih) = image.dimensions();
-    let scale = (MAX_WINDOW.0 / iw.max(1) as f32)
-        .min(MAX_WINDOW.1 / ih.max(1) as f32)
-        .min(1.0);
-    let w = (iw as f32 * scale).round().max(1.0) as u32;
-    let h = (ih as f32 * scale).round().max(1.0) as u32;
-    let scaled;
-    let displayed = if (w, h) == (iw, ih) {
-        image
+/// Scales `image` down (never up) to fit `max_w` × `max_h`, keeping its
+/// proportions. Both filters average source pixels, unlike nearest-neighbor
+/// scaling, so photos stay smooth at any size.
+fn fit(image: &RgbaImage, max_w: u32, max_h: u32, filter: FilterType) -> RgbaImage {
+    let (w, h) = fitted_size(image.dimensions(), (max_w, max_h));
+    if (w, h) == image.dimensions() {
+        image.clone()
     } else {
-        scaled = image::imageops::resize(image, w, h, image::imageops::FilterType::Triangle);
+        image::imageops::resize(image, w, h, filter)
+    }
+}
+
+/// The largest size within `bounds` with the image's proportions, at most
+/// the image's own size.
+fn fitted_size((iw, ih): (u32, u32), (bw, bh): (u32, u32)) -> (u32, u32) {
+    let scale = (bw as f64 / iw.max(1) as f64)
+        .min(bh as f64 / ih.max(1) as f64)
+        .min(1.0);
+    let w = (iw as f64 * scale).round().max(1.0) as u32;
+    let h = (ih as f64 * scale).round().max(1.0) as u32;
+    (w, h)
+}
+
+/// Draws the image centered in a window of `size`, scaled to fit and with
+/// transparency composed over a checkerboard. Sizes up to the preview are
+/// rendered from the preview, which is fast; larger ones from the original,
+/// which keeps detail.
+fn render_frame(shown: &Shown, size: (usize, usize)) -> Frame {
+    let (fw, fh) = (size.0.max(1), size.1.max(1));
+    let (tw, th) = fitted_size(shown.image.dimensions(), (fw as u32, fh as u32));
+    let source = if tw <= shown.preview.width() && th <= shown.preview.height() {
+        &shown.preview
+    } else {
+        &shown.image
+    };
+    let scaled;
+    let shown_image = if source.dimensions() == (tw, th) {
+        source
+    } else {
+        scaled = image::imageops::resize(source, tw, th, FilterType::CatmullRom);
         &scaled
     };
-    let buffer = displayed
-        .enumerate_pixels()
-        .map(|(x, y, p)| {
-            let tile = (x as usize / CHECKER + y as usize / CHECKER) % 2;
-            let bg = CHECKER_SHADES[tile];
-            let a = p[3] as u32;
-            let mix = |c: u8| (c as u32 * a + bg * (255 - a)) / 255;
-            (mix(p[0]) << 16) | (mix(p[1]) << 8) | mix(p[2])
-        })
-        .collect();
-    (buffer, (w as usize, h as usize))
+    let mut buffer = vec![BACKGROUND; fw * fh];
+    let (ox, oy) = ((fw - tw as usize) / 2, (fh - th as usize) / 2);
+    for (x, y, p) in shown_image.enumerate_pixels() {
+        let (x, y) = (x as usize, y as usize);
+        let tile = (x / CHECKER + y / CHECKER) % 2;
+        let bg = CHECKER_SHADES[tile];
+        let a = p[3] as u32;
+        let mix = |c: u8| (c as u32 * a + bg * (255 - a)) / 255;
+        buffer[(oy + y) * fw + ox + x] = (mix(p[0]) << 16) | (mix(p[1]) << 8) | mix(p[2]);
+    }
+    Frame {
+        buffer,
+        size: (fw, fh),
+    }
 }
 
 fn title(shown: &Shown, status: Option<&str>) -> String {
