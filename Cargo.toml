@@ -7,19 +7,47 @@ description = "Experimental planar RGBA image codec prototype"
 license = "Apache-2.0"
 repository = "https://github.com/proteo5/bic"
 readme = "README.md"
+default-run = "bic"
 keywords = ["image", "codec", "compression", "rle", "zstd"]
 categories = ["multimedia::images", "compression", "command-line-utilities"]
 
+[features]
+default = ["cli"]
+# The `bic` command-line tool and the `bic-view` viewer. The codec library
+# itself needs none of these.
+cli = [
+    "dep:clap",
+    "dep:heic-rs",
+    "dep:minifb",
+    "dep:oxipng",
+    "dep:rfd",
+    "image/jpeg",
+    "image/webp",
+    "image/bmp",
+    "image/gif",
+    "image/tiff",
+    "image/qoi",
+]
+
+[[bin]]
+name = "bic"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "bic-view"
+path = "src/bin/bic-view.rs"
+required-features = ["cli"]
+
 [dependencies]
 anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff", "qoi"] }
-heic-rs = "0.1.4"
-minifb = "0.28"
+image = { version = "0.25", default-features = false, features = ["png"] }
 zstd = "0.13"
-oxipng = { version = "10.2.1", default-features = false, features = ["parallel"] }
-rfd = "0.17"
+clap = { version = "4.5", features = ["derive"], optional = true }
+heic-rs = { version = "0.1.4", optional = true }
+minifb = { version = "0.28", optional = true }
+oxipng = { version = "10.2.1", default-features = false, features = ["parallel"], optional = true }
+rfd = { version = "0.17", optional = true }
 
 [dev-dependencies]
 proptest = "1"
-tempfile = "3.13"

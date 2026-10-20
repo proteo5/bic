@@ -11,7 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 zstd = "0.13"
-bic = { path = ".." }
+# Codec only: no CLI or viewer dependencies (and no system libraries).
+bic = { path = "..", default-features = false }
 
 # Keep the fuzz crate out of any parent workspace.
 [workspace]

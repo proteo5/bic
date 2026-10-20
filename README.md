@@ -141,8 +141,12 @@ Add the crate from Git:
 
 ```toml
 [dependencies]
-bic = { git = "https://github.com/proteo5/bic" }
+bic = { git = "https://github.com/proteo5/bic", default-features = false }
 ```
+
+`default-features = false` leaves out the `cli` feature (command-line tool,
+viewer, file dialogs and extra input formats). The codec then depends only on
+`anyhow`, `image` (PNG) and `zstd`.
 
 ```rust
 use bic::{decode_rgba, decode_rgba_with_limits, encode_rgba, DecodeLimits, EncodeOptions};
