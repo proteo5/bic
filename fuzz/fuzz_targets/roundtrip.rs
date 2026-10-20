@@ -28,6 +28,8 @@ fuzz_target!(|input: Input| {
         max_error: input.max_error,
         png_fallback: input.png_fallback,
         fast_decode: input.fast_decode,
+        // Only applies to encode_file; this target encodes raw pixels.
+        keep_original: false,
         zstd_level: 1,
     };
     let file = encode_rgba(w, h, &rgba, options).expect("encode");

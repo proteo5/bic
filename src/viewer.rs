@@ -8,7 +8,10 @@
 
 use crate::load::{self, EXTENSIONS};
 use anyhow::{Context, Result};
-use bic::{decode_with_metadata, encode_rgba_with_metadata, DecodeLimits, EncodeOptions, Metadata};
+use bic::{
+    decode_with_metadata, encode_rgba_with_metadata, encode_source, storage, DecodeLimits,
+    EncodeOptions, Metadata, Source, Storage,
+};
 use image::{imageops::FilterType, RgbaImage};
 use minifb::{Key, KeyRepeat, Menu, ScaleMode, Window, WindowOptions, MENU_KEY_CTRL};
 use std::{
@@ -35,6 +38,9 @@ struct Shown {
     image: RgbaImage,
     preview: RgbaImage,
     metadata: Metadata,
+    /// The file the image was read from, unless it was a `.bic` file. Saving
+    /// stores it unchanged when that is smaller than BIC's own encoding.
+    original: Option<Vec<u8>>,
 }
 
 /// What was last drawn, at exactly the window's size, so minifb never has to
@@ -47,24 +53,24 @@ struct Frame {
 /// A save running on a background thread.
 struct Saving {
     target: PathBuf,
-    done: mpsc::Receiver<Result<usize>>,
+    done: mpsc::Receiver<Result<(usize, Storage)>>,
 }
 
-/// Reads a `.bic` file or any image `load` reads, with its metadata.
-pub fn open(path: &Path, limits: DecodeLimits) -> Result<(RgbaImage, Metadata)> {
+/// The image, its metadata and, for non-BIC files, the file's bytes.
+pub type Opened = (RgbaImage, Metadata, Option<Vec<u8>>);
+
+/// Reads a `.bic` file or any image `load` reads.
+pub fn open(path: &Path, limits: DecodeLimits) -> Result<Opened> {
     if is_bic(path) {
         let file = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         let d = decode_with_metadata(&file, limits)
             .with_context(|| format!("decoding {}", path.display()))?;
         let image =
             RgbaImage::from_raw(d.width, d.height, d.rgba).context("decoded size mismatch")?;
-        Ok((image, d.metadata))
+        Ok((image, d.metadata, None))
     } else {
         let loaded = load::load(path)?;
-        let metadata = Metadata {
-            icc_profile: loaded.icc_profile,
-        };
-        Ok((loaded.image, metadata))
+        Ok((loaded.image, loaded.source.metadata, Some(loaded.original)))
     }
 }
 
@@ -147,11 +153,16 @@ pub fn view(path: Option<&Path>, limits: DecodeLimits) -> Result<()> {
         if let Some(result) = finished {
             let target = saving.take().expect("a save was running").target;
             match result {
-                Ok(bytes) => {
+                Ok((bytes, how)) => {
                     let status = format!(
-                        "saved {} ({:.1} KiB)",
+                        "saved {} ({:.1} KiB{})",
                         file_name(&target),
-                        bytes as f64 / 1024.0
+                        bytes as f64 / 1024.0,
+                        if how == Storage::Original {
+                            ", original file kept"
+                        } else {
+                            ""
+                        }
                     );
                     window.set_title(&title(&current, Some(&status)));
                 }
@@ -187,7 +198,7 @@ pub fn error_dialog(message: &str) {
 }
 
 fn show(path: &Path, limits: DecodeLimits) -> Result<Shown> {
-    let (image, metadata) = open(path, limits)?;
+    let (image, metadata, original) = open(path, limits)?;
     let preview = fit(
         &image,
         MAX_WINDOW.0 as u32,
@@ -199,6 +210,7 @@ fn show(path: &Path, limits: DecodeLimits) -> Result<Shown> {
         image,
         preview,
         metadata,
+        original,
     })
 }
 
@@ -315,31 +327,55 @@ fn pick_save_target(current: &Path) -> Option<PathBuf> {
 }
 
 fn start_save(shown: &Shown, target: PathBuf) -> Saving {
-    let (image, metadata) = (shown.image.clone(), shown.metadata.clone());
+    let (image, metadata, original) = (
+        shown.image.clone(),
+        shown.metadata.clone(),
+        shown.original.clone(),
+    );
     let (sender, done) = mpsc::channel();
     let path = target.clone();
     thread::spawn(move || {
         // The receiver may be gone if the window closed; nothing to report then.
-        let _ = sender.send(save_bic(&path, &image, &metadata));
+        let _ = sender.send(save_bic(&path, image, metadata, original.as_deref()));
     });
     Saving { target, done }
 }
 
-/// Encodes losslessly with the default (size-first) settings. The file is
-/// written under a temporary name and renamed, so an interrupted save never
-/// leaves a truncated `.bic` behind.
-fn save_bic(target: &Path, image: &RgbaImage, metadata: &Metadata) -> Result<usize> {
-    let file = encode_rgba_with_metadata(
-        image.width(),
-        image.height(),
-        image.as_raw(),
-        metadata,
-        EncodeOptions::default(),
-    )?;
+/// Encodes with the default (size-first) settings: BIC's own lossless coding,
+/// or the original file unchanged when that is smaller. The file is written
+/// under a temporary name and renamed, so an interrupted save never leaves a
+/// truncated `.bic` behind.
+fn save_bic(
+    target: &Path,
+    image: RgbaImage,
+    metadata: Metadata,
+    original: Option<&[u8]>,
+) -> Result<(usize, Storage)> {
+    let options = EncodeOptions::default();
+    let file = match original {
+        Some(original) => {
+            let source = Source {
+                width: image.width(),
+                height: image.height(),
+                rgba: image.into_raw(),
+                metadata,
+                embeddable: bic::embeddable_format(original),
+                notes: Vec::new(),
+            };
+            encode_source(&source, original, options)?
+        }
+        None => encode_rgba_with_metadata(
+            image.width(),
+            image.height(),
+            image.as_raw(),
+            &metadata,
+            options,
+        )?,
+    };
     let partial = target.with_extension("bic.partial");
     fs::write(&partial, &file).with_context(|| format!("writing {}", partial.display()))?;
     fs::rename(&partial, target).with_context(|| format!("writing {}", target.display()))?;
-    Ok(file.len())
+    Ok((file.len(), storage(&file)?))
 }
 
 #[cfg(test)]
@@ -357,15 +393,41 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bic-viewer-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let target = dir.join("saved.bic");
-        let bytes = save_bic(&target, &image, &metadata).unwrap();
+        let (bytes, how) = save_bic(&target, image.clone(), metadata.clone(), None).unwrap();
         let reopened = open(&target, DecodeLimits::default()).unwrap();
+        let on_disk = fs::metadata(&target).unwrap().len();
         let leftover = target.with_extension("bic.partial").exists();
         fs::remove_dir_all(&dir).ok();
-        assert_eq!(
-            bytes as u64,
-            fs::metadata(&target).map_or(bytes as u64, |m| m.len())
-        );
-        assert_eq!(reopened, (image, metadata));
+        assert_eq!((bytes as u64, how), (on_disk, Storage::Native));
+        assert_eq!(reopened, (image, metadata, None));
         assert!(!leftover);
+    }
+
+    #[test]
+    fn saving_a_jpeg_keeps_the_smaller_original() {
+        let mut seed = 3u32;
+        let image = RgbaImage::from_fn(96, 64, |x, y| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            image::Rgba([(x * 2) as u8 ^ (seed >> 27) as u8, (y * 3) as u8, 90, 255])
+        });
+        let mut jpeg = Vec::new();
+        image::DynamicImage::ImageRgba8(image)
+            .to_rgb8()
+            .write_to(
+                &mut std::io::Cursor::new(&mut jpeg),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("bic-viewer-jpeg-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (source_path, target) = (dir.join("photo.jpg"), dir.join("photo.bic"));
+        fs::write(&source_path, &jpeg).unwrap();
+        let (image, metadata, original) = open(&source_path, DecodeLimits::default()).unwrap();
+        let (bytes, how) = save_bic(&target, image.clone(), metadata, original.as_deref()).unwrap();
+        let reopened = open(&target, DecodeLimits::default()).unwrap().0;
+        fs::remove_dir_all(&dir).ok();
+        assert_eq!(how, Storage::Original);
+        assert_eq!(bytes, jpeg.len() + 32);
+        assert_eq!(reopened, image);
     }
 }

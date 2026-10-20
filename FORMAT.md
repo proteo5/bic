@@ -21,6 +21,14 @@ unchanged and applies no color management.
 bytes. `storage = 1` stores a complete PNG and is only emitted by the optional
 lossless PNG fallback. The fallback never replaces a lossy encode.
 
+`storage = 2` stores the source file unchanged (`plain_len` is 0). Encoders
+use it when the source file is smaller than BIC's own encoding, which is
+typical for JPEG. Decoders identify the embedded file by its signature. It
+must be PNG, JPEG, WebP or HEIF, and other files are rejected so that every
+decoder can open every BIC file. The decoded image is the embedded file
+decoded with its EXIF or HEIF orientation applied. Its dimensions must match
+the header. Its ICC profile is used unless the container carries one.
+
 ## Native stream
 
 ```text

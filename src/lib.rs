@@ -1,10 +1,15 @@
 use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 
+mod source;
+pub use source::{embeddable_format, read_source, EmbeddableFormat, Source};
+
 const MAGIC: &[u8; 4] = b"BIC2";
 const VERSION: u8 = 2;
 const STORAGE_NATIVE: u8 = 0;
 const STORAGE_PNG: u8 = 1;
+/// The source file (PNG, JPEG, WebP or HEIF) stored unchanged.
+const STORAGE_ORIGINAL: u8 = 2;
 const MAX_PIXELS: usize = 100_000_000;
 const MAX_PALETTE: usize = 256;
 const HEADER_LEN: usize = 32;
@@ -48,6 +53,11 @@ pub struct EncodeOptions {
     /// per-row prediction: somewhat larger files on photographs, about twice
     /// as fast to decode.
     pub fast_decode: bool,
+    /// When encoding a file (`encode_file`, `encode_source`), store the file
+    /// itself if it is smaller than BIC's own encoding, so the result is never
+    /// larger than the original plus the 32-byte header. Lossy originals such
+    /// as JPEG are usually kept this way.
+    pub keep_original: bool,
     pub zstd_level: i32,
 }
 
@@ -57,6 +67,7 @@ impl Default for EncodeOptions {
             max_error: 0,
             png_fallback: false,
             fast_decode: false,
+            keep_original: true,
             zstd_level: 19,
         }
     }
@@ -156,6 +167,50 @@ pub struct Decoded {
     /// 8-bit RGBA in row-major order.
     pub rgba: Vec<u8>,
     pub metadata: Metadata,
+}
+
+/// How a BIC file stores its image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Storage {
+    /// BIC's own planar coding.
+    Native,
+    /// A PNG of the pixels (`EncodeOptions::png_fallback`).
+    PngFallback,
+    /// The source file, unchanged (`EncodeOptions::keep_original`).
+    Original,
+}
+
+/// Encodes an image file (any format `read_source` reads). See
+/// `EncodeOptions::keep_original`.
+pub fn encode_file(bytes: &[u8], options: EncodeOptions) -> Result<Vec<u8>> {
+    let source = read_source(bytes, DecodeLimits::default())?;
+    encode_source(&source, bytes, options)
+}
+
+/// Encodes a source already read from `original` with `read_source`.
+pub fn encode_source(source: &Source, original: &[u8], options: EncodeOptions) -> Result<Vec<u8>> {
+    let native = encode_rgba_with_metadata(
+        source.width,
+        source.height,
+        &source.rgba,
+        &source.metadata,
+        options,
+    )?;
+    if options.keep_original
+        && source.embeddable.is_some()
+        && HEADER_LEN + original.len() <= native.len()
+    {
+        // The embedded file carries its own ICC profile and orientation.
+        return Ok(container_with_icc(
+            source.width,
+            source.height,
+            STORAGE_ORIGINAL,
+            0,
+            None,
+            original,
+        ));
+    }
+    Ok(native)
 }
 
 pub fn encode_rgba(
@@ -318,6 +373,33 @@ pub fn decode_with_metadata(file: &[u8], limits: DecodeLimits) -> Result<Decoded
         icc_profile: c.icc.map(|icc| icc.to_vec()),
     };
     let icc_len = c.icc.map_or(0, |icc| icc.len());
+    if c.storage == STORAGE_ORIGINAL {
+        ensure!(
+            pixels.checked_mul(4).is_some_and(|n| n <= limits.max_alloc),
+            "image exceeds decode memory limit"
+        );
+        // Only formats every build can decode may be embedded.
+        ensure!(
+            embeddable_format(c.payload).is_some(),
+            "embedded file is not PNG, JPEG, WebP or HEIF"
+        );
+        let source = read_source(c.payload, limits).context("embedded original")?;
+        ensure!(
+            (source.width, source.height) == (width, height),
+            "embedded image dimensions contradict BIC header"
+        );
+        let metadata = if metadata.icc_profile.is_some() {
+            metadata
+        } else {
+            source.metadata
+        };
+        return Ok(Decoded {
+            width,
+            height,
+            rgba: source.rgba,
+            metadata,
+        });
+    }
     if c.storage == STORAGE_PNG {
         ensure!(
             pixels
@@ -377,8 +459,14 @@ pub fn decode_with_metadata(file: &[u8], limits: DecodeLimits) -> Result<Decoded
     })
 }
 
-pub fn is_png_fallback(file: &[u8]) -> Result<bool> {
-    Ok(parse_container(file, MAX_PIXELS)?.storage == STORAGE_PNG)
+/// How `file` stores its image, from the header alone.
+pub fn storage(file: &[u8]) -> Result<Storage> {
+    match parse_container(file, MAX_PIXELS)?.storage {
+        STORAGE_NATIVE => Ok(Storage::Native),
+        STORAGE_PNG => Ok(Storage::PngFallback),
+        STORAGE_ORIGINAL => Ok(Storage::Original),
+        other => bail!("unsupported storage type {other}"),
+    }
 }
 
 fn checked_pixels(width: u32, height: u32, max_pixels: usize) -> Result<usize> {
@@ -1173,6 +1261,67 @@ mod tests {
             icc_profile: Some(vec![0; MAX_ICC + 1]),
         };
         assert!(encode_rgba_with_metadata(1, 1, &p, &huge, EncodeOptions::default()).is_err());
+    }
+    /// A noisy photo-like JPEG: much smaller than any lossless encoding.
+    fn noisy_jpeg() -> Vec<u8> {
+        let mut seed = 5u32;
+        let img = image::RgbaImage::from_fn(120, 80, |x, y| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let n = (seed >> 27) as u8;
+            image::Rgba([(x * 2) as u8 ^ n, (y * 3) as u8 + n, (x + y) as u8, 255])
+        });
+        source::tests::jpeg_with_orientation(&img, 1)
+    }
+    #[test]
+    fn keeps_a_smaller_original_file() {
+        let jpeg = noisy_jpeg();
+        let file = encode_file(&jpeg, EncodeOptions::default()).unwrap();
+        assert_eq!(storage(&file).unwrap(), Storage::Original);
+        assert_eq!(file.len(), HEADER_LEN + jpeg.len());
+        let expected = read_source(&jpeg, DecodeLimits::default()).unwrap();
+        let d = decode_with_metadata(&file, DecodeLimits::default()).unwrap();
+        assert_eq!(
+            (d.width, d.height, d.rgba),
+            (expected.width, expected.height, expected.rgba)
+        );
+        // Disabled: BIC's own encoding even though it is larger.
+        let options = EncodeOptions {
+            keep_original: false,
+            ..Default::default()
+        };
+        let transcoded = encode_file(&jpeg, options).unwrap();
+        assert_eq!(storage(&transcoded).unwrap(), Storage::Native);
+        assert!(transcoded.len() > file.len());
+    }
+    #[test]
+    fn transcodes_when_bic_is_smaller() {
+        use image::ImageEncoder;
+        // An uncompressed-looking PNG of flat graphics.
+        let img = image::RgbaImage::from_fn(200, 100, |x, _| {
+            image::Rgba([if x < 100 { 10 } else { 200 }, 50, 90, 255])
+        });
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new_with_quality(
+            &mut png,
+            image::codecs::png::CompressionType::Fast,
+            image::codecs::png::FilterType::NoFilter,
+        )
+        .write_image(img.as_raw(), 200, 100, image::ExtendedColorType::Rgba8)
+        .unwrap();
+        let file = encode_file(&png, EncodeOptions::default()).unwrap();
+        assert_eq!(storage(&file).unwrap(), Storage::Native);
+        assert!(file.len() < png.len());
+        assert_eq!(decode_rgba(&file).unwrap().2, img.into_raw());
+    }
+    #[test]
+    fn rejects_unsupported_or_mismatched_embedded_files() {
+        let bmp_like = container_with_icc(1, 1, STORAGE_ORIGINAL, 0, None, b"BM\0\0\0\0");
+        let err = decode_rgba(&bmp_like).unwrap_err();
+        assert!(format!("{err:#}").contains("not PNG, JPEG"), "{err:#}");
+        let jpeg = noisy_jpeg();
+        let wrong_size = container_with_icc(7, 7, STORAGE_ORIGINAL, 0, None, &jpeg);
+        let err = decode_rgba(&wrong_size).unwrap_err();
+        assert!(format!("{err:#}").contains("contradict"), "{err:#}");
     }
     #[test]
     fn quantizer_bounds_error_for_every_input() {

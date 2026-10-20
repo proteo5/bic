@@ -45,8 +45,12 @@ as a library and a command-line tool with a small native viewer.
   8-, 12- or 16-bit counters. The split with the fewest total bytes is chosen
   by dynamic programming.
 - **Zstandard wrapping** of the whole plane stream, with a configurable level.
-- **PNG fallback**: optionally stores a PNG inside the container whenever it is
-  smaller, so a lossless encode is never larger than the equivalent PNG.
+- **Never larger than the original**: when encoding a PNG, JPEG, WebP or HEIF
+  file, BIC keeps the file unchanged inside the container if that is smaller
+  than its own encoding. Lossy JPEGs are usually kept this way, at +32 bytes.
+  `--transcode` turns this off.
+- **PNG fallback**: optionally stores a PNG of the pixels whenever it is
+  smaller than BIC's own encoding.
 - **Wide input support**: PNG, JPEG, WebP, BMP, GIF, TIFF, HEIC and HEIF.
   EXIF orientation is applied, so phone photos come out upright.
 - **ICC color profiles** are kept: read from the source image, stored in the
@@ -55,8 +59,9 @@ as a library and a command-line tool with a small native viewer.
   allocated.
 - **Desktop viewer and converter**: `bic-view` opens `.bic` files and every
   supported input format. **File > Open** (Ctrl+O) opens another image, and
-  **File > Save as BIC** (Ctrl+S) converts the current one to a lossless `.bic`
-  in the background, keeping its ICC profile. It runs without a console
+  **File > Save as BIC** (Ctrl+S) saves the current one as `.bic` in the
+  background, losslessly and with its ICC profile, keeping the original file
+  inside when that is smaller. It runs without a console
   window, opens on double-click through a Windows file association, shows
   transparency over a checkerboard, and reports errors in a dialog. Images are
   scaled to the window with smooth resampling (Lanczos3 and Catmull-Rom),
@@ -98,7 +103,8 @@ and `bic-view`, the viewer (`.exe` on Windows).
 | Option | Default | Effect |
 | --- | --- | --- |
 | `--max-error <N>` | `0` | Largest allowed difference per sample. `0` is lossless. The encoder also tries lossless coding and keeps it when it is smaller. |
-| `--png-fallback` | off | Store a PNG instead when it is smaller (lossless encodes only). |
+| `--png-fallback` | off | Store a PNG of the pixels instead when it is smaller (lossless encodes only). |
+| `--transcode` | off | Always use BIC's own encoding, even when the original PNG/JPEG/WebP/HEIF file is smaller. |
 | `--fast-decode` | off | Skip per-row prediction. On photographs: about 1 % larger, about 35 % faster to decode. No effect on flat graphics. |
 | `--zstd-level <N>` | `19` | Zstandard compression level (1–22). Higher levels shrink files; decoding speed barely changes. |
 
@@ -116,8 +122,8 @@ bic verify photo.jpg photo.bic --max-error 2
 # Faster to open, slightly larger
 bic encode photo.jpg photo.bic --fast-decode
 
-# Never larger than PNG
-bic encode screenshot.png screenshot.bic --png-fallback
+# A JPEG is usually kept as is inside the .bic (+32 bytes)
+bic encode photo.jpg photo.bic
 
 # Decode back to PNG
 bic decode screenshot.bic restored.png
@@ -146,8 +152,13 @@ bic = { git = "https://github.com/proteo5/bic", default-features = false }
 ```
 
 `default-features = false` leaves out the `cli` feature (command-line tool,
-viewer, file dialogs and extra input formats). The codec then depends only on
-`anyhow`, `image` (PNG) and `zstd`.
+viewer, file dialogs and the BMP, GIF, TIFF and QOI inputs). The codec then
+depends on `anyhow`, `zstd`, `image` (PNG, JPEG, WebP) and `heic-rs`. The
+decoders are needed because a BIC file may embed an original file.
+
+To encode a file rather than raw pixels (keeping the original when it is
+smaller), use `encode_file`. `read_source` decodes PNG, JPEG, WebP and HEIF
+with orientation applied.
 
 ```rust
 use bic::{decode_rgba, decode_rgba_with_limits, encode_rgba, DecodeLimits, EncodeOptions};

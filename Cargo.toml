@@ -17,12 +17,9 @@ default = ["cli"]
 # itself needs none of these.
 cli = [
     "dep:clap",
-    "dep:heic-rs",
     "dep:minifb",
     "dep:oxipng",
     "dep:rfd",
-    "image/jpeg",
-    "image/webp",
     "image/bmp",
     "image/gif",
     "image/tiff",
@@ -41,10 +38,11 @@ required-features = ["cli"]
 
 [dependencies]
 anyhow = "1.0"
-image = { version = "0.25", default-features = false, features = ["png"] }
+# The codec reads the formats a BIC file may embed: PNG, JPEG, WebP, HEIF.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+heic-rs = "0.1.4"
 zstd = "0.13"
 clap = { version = "4.5", features = ["derive"], optional = true }
-heic-rs = { version = "0.1.4", optional = true }
 minifb = { version = "0.28", optional = true }
 oxipng = { version = "10.2.1", default-features = false, features = ["parallel"], optional = true }
 rfd = { version = "0.17", optional = true }

@@ -4,8 +4,7 @@ mod viewer;
 
 use anyhow::{bail, ensure, Context, Result};
 use bic::{
-    decode_with_metadata, encode_rgba_with_metadata, is_png_fallback, DecodeLimits, Decoded,
-    EncodeOptions, Metadata,
+    decode_with_metadata, encode_source, storage, DecodeLimits, Decoded, EncodeOptions, Storage,
 };
 use clap::{Parser, Subcommand};
 use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder};
@@ -40,6 +39,10 @@ enum Command {
         /// Only use predictors that decode fastest (larger files on photos)
         #[arg(long)]
         fast_decode: bool,
+        /// Always store BIC's own encoding, even when the original file is
+        /// smaller (by default a smaller PNG, JPEG, WebP or HEIF is kept as is)
+        #[arg(long)]
+        transcode: bool,
         #[arg(long, default_value_t = 19)]
         zstd_level: i32,
     },
@@ -164,43 +167,36 @@ fn main() -> Result<()> {
             max_error,
             png_fallback,
             fast_decode,
+            transcode,
             zstd_level,
         } => {
             let loaded = load::load(&input)?;
-            for note in &loaded.notes {
+            for note in &loaded.source.notes {
                 eprintln!("note: {note}");
             }
-            let image = &loaded.image;
-            let metadata = Metadata {
-                icc_profile: loaded.icc_profile.clone(),
-            };
+            let mut source = loaded.source;
+            source.rgba = loaded.image.into_raw();
             let options = EncodeOptions {
                 max_error,
                 png_fallback,
                 fast_decode,
+                keep_original: !transcode,
                 zstd_level,
             };
-            let f = encode_rgba_with_metadata(
-                image.width(),
-                image.height(),
-                image.as_raw(),
-                &metadata,
-                options,
-            )?;
+            let f = encode_source(&source, &loaded.original, options)?;
             fs::write(&output, &f)?;
-            println!(
-                "wrote {} bytes ({}{})",
-                f.len(),
-                if is_png_fallback(&f)? {
-                    "PNG fallback"
-                } else {
-                    "native BIC"
-                },
-                if metadata.icc_profile.is_some() {
-                    ", with ICC profile"
-                } else {
-                    ""
+            let how = match storage(&f)? {
+                Storage::Native if source.metadata.icc_profile.is_some() => {
+                    "native BIC, with ICC profile"
                 }
+                Storage::Native => "native BIC",
+                Storage::PngFallback => "PNG fallback",
+                Storage::Original => "original file kept: smaller than BIC's own encoding",
+            };
+            println!(
+                "wrote {} bytes ({how}); original {} bytes",
+                f.len(),
+                loaded.original.len()
             );
         }
         Command::Decode { input, output } => write_image(&output, read_bic(&input, limits)?)?,
