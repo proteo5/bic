@@ -92,7 +92,8 @@ Every decoded sample is within `max_error` of the original. With
 The reference encoder builds every valid combination of transform and
 predictor in parallel and keeps the smallest file. For per-row prediction it
 codes each row with every rule and keeps the one with the smallest sum of
-quantized residual magnitudes. Encoding speed is deliberately traded for file
+quantized residual magnitudes. With the `fast_decode` option it skips
+predictor `2`, so every row decodes on the vectorizable path. Encoding speed is deliberately traded for file
 size. Any valid combination decodes.
 
 ## Blocks and modes

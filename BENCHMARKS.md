@@ -61,10 +61,13 @@ it. Below 1.000 means BIC is smaller.
 | + vectorized lossless decoding | — | — | 181 ms |
 | + Zstd level 19 | 0.755 | 0.848 | ≈ same |
 | + every transform/predictor candidate | 0.755 | 0.848 | — |
-| + per-row predictors | 0.755 | **0.837** | 375 ms |
+| + per-row predictors (default) | 0.755 | **0.837** | 375 ms |
+| `--fast-decode` (no per-row predictors) | 0.755 | 0.848 | 237 ms |
 
 Priorities are file size first and decoding speed second; encoding time is
-not a goal. Per-row predictors cost decoding speed on photographs because
+not a goal. `--fast-decode` gives up the per-row predictors for faster opening:
+on the photo set the files are 1.2 % larger in total and decoding all 14
+images takes 304 ms instead of 466 ms. Per-row predictors cost decoding speed on photographs because
 left, average, Paeth and MED rows depend on the sample just decoded. On the
 flat-graphics corpus every image decodes in under 2 ms. Encoding the
 20-megapixel photo takes about a minute.

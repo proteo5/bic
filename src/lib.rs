@@ -40,6 +40,10 @@ pub struct EncodeOptions {
     pub max_error: u8,
     /// Store a PNG instead when it is smaller (lossless encodes only).
     pub png_fallback: bool,
+    /// Only use predictors the decoder can vectorize (none and up), giving up
+    /// per-row prediction: somewhat larger files on photographs, about twice
+    /// as fast to decode.
+    pub fast_decode: bool,
     pub zstd_level: i32,
 }
 
@@ -48,6 +52,7 @@ impl Default for EncodeOptions {
         Self {
             max_error: 0,
             png_fallback: false,
+            fast_decode: false,
             zstd_level: 19,
         }
     }
@@ -142,7 +147,7 @@ pub fn encode_rgba(
         rgba.len() == pixels * 4,
         "RGBA byte count does not match dimensions"
     );
-    let (palette, candidates) = candidates(rgba, options.max_error);
+    let (palette, candidates) = candidates(rgba, options.max_error, options.fast_decode);
     let encode = |(transform, predictor)| -> Result<Vec<u8>> {
         let plain = native_stream(
             width as usize,
@@ -197,17 +202,27 @@ pub fn encode_rgba(
 }
 
 /// The encodings to try for this image: every valid transform and predictor
-/// combination. Encoding time is not a priority, so the encoder simply keeps
-/// whichever is smallest.
-fn candidates(rgba: &[u8], max_error: u8) -> (Option<Palette>, Vec<(Transform, Predictor)>) {
+/// combination (without per-row prediction when `fast_decode` is set).
+/// Encoding time is not a priority, so the encoder simply keeps whichever is
+/// smallest.
+fn candidates(
+    rgba: &[u8],
+    max_error: u8,
+    fast_decode: bool,
+) -> (Option<Palette>, Vec<(Transform, Predictor)>) {
     let palette = (max_error == 0).then(|| build_palette(rgba)).flatten();
     let mut transforms = vec![Transform::Direct, Transform::SubtractGreen];
     if palette.is_some() {
         transforms.push(Transform::Palette);
     }
+    let predictors: &[Predictor] = if fast_decode {
+        &[Predictor::None, Predictor::Up]
+    } else {
+        &[Predictor::None, Predictor::Up, Predictor::PerRow]
+    };
     let list = transforms
         .into_iter()
-        .flat_map(|t| [Predictor::None, Predictor::Up, Predictor::PerRow].map(|p| (t, p)))
+        .flat_map(|t| predictors.iter().map(move |&p| (t, p)))
         .collect();
     (palette, list)
 }
@@ -957,7 +972,7 @@ mod tests {
             }
         }
         for rgba in [few_colors, many_colors] {
-            let (palette, list) = candidates(&rgba, 0);
+            let (palette, list) = candidates(&rgba, 0, false);
             for (transform, predictor) in list {
                 let plain =
                     native_stream(41, &rgba, palette.as_ref(), transform, predictor, 0).unwrap();
@@ -965,6 +980,35 @@ mod tests {
                 assert_eq!(decoded, rgba, "{transform:?}/{predictor:?}");
             }
         }
+    }
+    /// The predictor byte of a native file's stream.
+    pub(crate) fn stored_predictor(file: &[u8]) -> Option<u8> {
+        let (_, _, storage, plain_len, payload) = parse_container(file, MAX_PIXELS).unwrap();
+        (storage == STORAGE_NATIVE)
+            .then(|| zstd::bulk::decompress(payload, plain_len as usize).unwrap()[1])
+    }
+    #[test]
+    fn fast_decode_never_uses_per_row_prediction() {
+        // A photo-like image, where per-row prediction normally wins.
+        let mut seed = 11u32;
+        let p: Vec<u8> = (0..96 * 64u32)
+            .flat_map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let n = seed >> 28;
+                let (x, y) = (i % 96, i / 96);
+                [(x * 2 + n) as u8, (x + y + n) as u8, (y * 3 + n) as u8, 255]
+            })
+            .collect();
+        let default = encode_rgba(96, 64, &p, EncodeOptions::default()).unwrap();
+        let options = EncodeOptions {
+            fast_decode: true,
+            ..Default::default()
+        };
+        let fast = encode_rgba(96, 64, &p, options).unwrap();
+        assert_eq!(stored_predictor(&default), Some(Predictor::PerRow as u8));
+        assert!(stored_predictor(&fast).unwrap() < Predictor::PerRow as u8);
+        assert_eq!(decode_rgba(&fast).unwrap().2, p);
+        assert!(default.len() <= fast.len());
     }
     #[test]
     fn quantizer_bounds_error_for_every_input() {

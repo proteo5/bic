@@ -29,7 +29,7 @@ struct Row {
     decode: Duration,
 }
 
-pub fn run(paths: &[PathBuf], zstd_level: i32, csv: Option<&Path>) -> Result<()> {
+pub fn run(paths: &[PathBuf], options: EncodeOptions, csv: Option<&Path>) -> Result<()> {
     let files = collect(paths)?;
     ensure!(!files.is_empty(), "no supported images found");
     if cfg!(debug_assertions) {
@@ -38,7 +38,7 @@ pub fn run(paths: &[PathBuf], zstd_level: i32, csv: Option<&Path>) -> Result<()>
     let mut rows = Vec::new();
     let mut failed = 0;
     for file in &files {
-        match measure(file, zstd_level) {
+        match measure(file, options) {
             Ok(row) => rows.push(row),
             Err(e) => {
                 eprintln!("failed {}: {e:#}", file.display());
@@ -84,7 +84,7 @@ fn is_supported(path: &Path) -> bool {
         .is_some_and(|x| EXTENSIONS.contains(&x.to_ascii_lowercase().as_str()))
 }
 
-fn measure(path: &Path, zstd_level: i32) -> Result<Row> {
+fn measure(path: &Path, options: EncodeOptions) -> Result<Row> {
     let image = crate::load(path)?;
     let (width, height) = image.dimensions();
     let png = encode_as(&image, ImageFormat::Png)?;
@@ -100,10 +100,6 @@ fn measure(path: &Path, zstd_level: i32) -> Result<Row> {
     )?;
     let qoi = encode_as(&image, ImageFormat::Qoi)?.len();
 
-    let options = EncodeOptions {
-        zstd_level,
-        ..Default::default()
-    };
     let t = Instant::now();
     let bic = encode_rgba(width, height, image.as_raw(), options)?;
     let encode = t.elapsed();

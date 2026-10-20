@@ -78,7 +78,7 @@ The binary is written to `target/release/bic` (`bic.exe` on Windows).
 | `bic decode <input.bic> <output>` | Decode to any format inferred from the output extension |
 | `bic view <file>` | Open a `.bic` or any supported image in the viewer (Esc closes it) |
 | `bic verify <original> <file.bic>` | Check that a lossless BIC decodes to exactly the original pixels |
-| `bic compare <paths>... [--csv out.csv]` | Benchmark lossless BIC against PNG, oxipng, WebP and QOI on files or folders |
+| `bic compare <paths>... [--fast-decode] [--csv out.csv]` | Benchmark lossless BIC against PNG, oxipng, WebP and QOI on files or folders |
 | `bic install-association` | Associate `.bic` with the viewer for the current Windows user |
 
 ### Encode options
@@ -87,6 +87,7 @@ The binary is written to `target/release/bic` (`bic.exe` on Windows).
 | --- | --- | --- |
 | `--max-error <N>` | `0` | Largest allowed difference per sample. `0` is lossless. |
 | `--png-fallback` | off | Store a PNG instead when it is smaller (lossless encodes only). |
+| `--fast-decode` | off | Skip per-row prediction. On photographs: about 1 % larger, about 35 % faster to decode. No effect on flat graphics. |
 | `--zstd-level <N>` | `19` | Zstandard compression level (1–22). Higher levels shrink files; decoding speed barely changes. |
 
 ### Examples
@@ -98,6 +99,9 @@ bic verify screenshot.png screenshot.bic
 
 # Near-lossless: no sample differs by more than 2
 bic encode photo.jpg photo.bic --max-error 2
+
+# Faster to open, slightly larger
+bic encode photo.jpg photo.bic --fast-decode
 
 # Never larger than PNG
 bic encode screenshot.png screenshot.bic --png-fallback
@@ -209,7 +213,7 @@ photographs. CI reruns the synthetic benchmark on every push.
 - No animation or progressive decoding.
 - Encoding is slow by design (about a minute for a 20-megapixel photo).
 - Rows that use the left, average, Paeth or MED rules decode sequentially,
-  about half the speed of `none` and `up` rows.
+  about half the speed of `none` and `up` rows. `--fast-decode` avoids them.
 - Near-lossless decoding uses a per-sample loop and is slower than lossless.
 - The format version may change without a migration path.
 

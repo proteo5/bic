@@ -32,6 +32,9 @@ enum Command {
         /// Store a PNG instead when it is smaller (lossless only)
         #[arg(long)]
         png_fallback: bool,
+        /// Only use predictors that decode fastest (larger files on photos)
+        #[arg(long)]
+        fast_decode: bool,
         #[arg(long, default_value_t = 19)]
         zstd_level: i32,
     },
@@ -50,6 +53,9 @@ enum Command {
     Compare {
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
+        /// Only use predictors that decode fastest (larger files on photos)
+        #[arg(long)]
+        fast_decode: bool,
         #[arg(long, default_value_t = 19)]
         zstd_level: i32,
         /// Also write per-image results to this CSV file
@@ -163,6 +169,7 @@ fn main() -> Result<()> {
             output,
             max_error,
             png_fallback,
+            fast_decode,
             zstd_level,
         } => {
             let i = load(&input)?;
@@ -173,6 +180,7 @@ fn main() -> Result<()> {
                 EncodeOptions {
                     max_error,
                     png_fallback,
+                    fast_decode,
                     zstd_level,
                 },
             )?;
@@ -206,9 +214,17 @@ fn main() -> Result<()> {
         }
         Command::Compare {
             inputs,
+            fast_decode,
             zstd_level,
             csv,
-        } => bench::run(&inputs, zstd_level, csv.as_deref())?,
+        } => {
+            let options = EncodeOptions {
+                fast_decode,
+                zstd_level,
+                ..Default::default()
+            };
+            bench::run(&inputs, options, csv.as_deref())?
+        }
         Command::InstallAssociation => install_association()?,
     };
     Ok(())

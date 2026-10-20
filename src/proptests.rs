@@ -94,9 +94,17 @@ const SMALL: DecodeLimits = DecodeLimits {
 
 proptest! {
     #[test]
-    fn lossless_roundtrip((w, h, p) in image(), zstd_level in 1i32..=6, png_fallback: bool) {
-        let options = EncodeOptions { zstd_level, png_fallback, ..Default::default() };
+    fn lossless_roundtrip(
+        (w, h, p) in image(),
+        zstd_level in 1i32..=6,
+        png_fallback: bool,
+        fast_decode: bool,
+    ) {
+        let options = EncodeOptions { zstd_level, png_fallback, fast_decode, ..Default::default() };
         let file = encode_rgba(w, h, &p, options).unwrap();
+        if fast_decode {
+            prop_assert!(crate::tests::stored_predictor(&file).is_none_or(|p| p < Predictor::PerRow as u8));
+        }
         prop_assert_eq!(decode_rgba(&file).unwrap(), (w, h, p));
     }
 
@@ -113,7 +121,7 @@ proptest! {
     /// Every candidate the encoder may pick, not only the smallest one.
     #[test]
     fn every_candidate_meets_its_error_bound((w, h, p) in image(), max_error in prop_oneof![Just(0u8), 1u8..=60]) {
-        let (palette, list) = candidates(&p, max_error);
+        let (palette, list) = candidates(&p, max_error, false);
         for (transform, predictor) in list {
             let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, max_error).unwrap();
             let (_, _, d) = decode_native(w, h, &plain).unwrap();
@@ -150,7 +158,7 @@ proptest! {
         tail in prop::collection::vec(any::<u8>(), 0..4),
     ) {
         // Mutating the plain stream (not the Zstd bytes) reaches the parser.
-        let (palette, list) = candidates(&p, max_error);
+        let (palette, list) = candidates(&p, max_error, false);
         let (transform, predictor) = list[pick as usize];
         let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, max_error).unwrap();
         let _ = decode_native(w, h, &mutate(plain, &edits, cut, &tail));
