@@ -12,6 +12,7 @@ struct Input {
     height: u8,
     max_error: u8,
     png_fallback: bool,
+    fast_decode: bool,
     pixels: Vec<u8>,
 }
 
@@ -26,6 +27,7 @@ fuzz_target!(|input: Input| {
     let options = EncodeOptions {
         max_error: input.max_error,
         png_fallback: input.png_fallback,
+        fast_decode: input.fast_decode,
         zstd_level: 1,
     };
     let file = encode_rgba(w, h, &rgba, options).expect("encode");

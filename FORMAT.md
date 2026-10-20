@@ -9,7 +9,13 @@ the original image.
 
 The fixed 32-byte header is `magic[4]`, `version:u8`, `storage:u8`,
 `flags:u16`, `width:u32`, `height:u32`, `plain_len:u64`, and `payload_len:u64`.
-`flags` is reserved and must be 0; decoders reject any other value.
+Bit 0 of `flags` (`0x0001`) means an ICC profile follows the header as
+`icc_len:u32` and `icc_len` bytes (at most 16 MiB). The payload comes after
+it. All other flag bits are reserved and must be 0, and decoders reject files
+that set them. `payload_len` counts the payload only.
+
+The profile describes the color space of the stored pixels. BIC stores it
+unchanged and applies no color management.
 
 `storage = 0` stores a Zstandard-compressed native stream of `plain_len`
 bytes. `storage = 1` stores a complete PNG and is only emitted by the optional
@@ -93,7 +99,9 @@ The reference encoder builds every valid combination of transform and
 predictor in parallel and keeps the smallest file. For per-row prediction it
 codes each row with every rule and keeps the one with the smallest sum of
 quantized residual magnitudes. With the `fast_decode` option it skips
-predictor `2`, so every row decodes on the vectorizable path. Encoding speed is deliberately traded for file
+predictor `2`, so every row decodes on the vectorizable path. For a
+near-lossless request it also tries every lossless combination, since an
+exact file satisfies any error bound. Encoding speed is deliberately traded for file
 size. Any valid combination decodes.
 
 ## Blocks and modes

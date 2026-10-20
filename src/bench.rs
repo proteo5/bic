@@ -1,4 +1,5 @@
-//! Corpus benchmark: lossless BIC against the common lossless formats.
+//! Corpus benchmark: BIC against the common lossless formats. With
+//! `max_error` above 0 it measures near-lossless BIC and reports PSNR.
 
 use anyhow::{anyhow, ensure, Result};
 use bic::{decode_rgba, encode_rgba, EncodeOptions};
@@ -9,9 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const EXTENSIONS: [&str; 11] = [
-    "png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff", "qoi", "heic", "heif",
-];
 const OXIPNG_PRESET: u8 = 2;
 
 type SizeOf = fn(&Row) -> usize;
@@ -27,6 +25,8 @@ struct Row {
     bic: usize,
     encode: Duration,
     decode: Duration,
+    /// Peak signal-to-noise ratio over all RGBA samples, for lossy runs.
+    psnr: Option<f64>,
 }
 
 pub fn run(paths: &[PathBuf], options: EncodeOptions, csv: Option<&Path>) -> Result<()> {
@@ -81,11 +81,11 @@ fn collect(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 fn is_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|x| x.to_str())
-        .is_some_and(|x| EXTENSIONS.contains(&x.to_ascii_lowercase().as_str()))
+        .is_some_and(|x| crate::load::EXTENSIONS.contains(&x.to_ascii_lowercase().as_str()))
 }
 
 fn measure(path: &Path, options: EncodeOptions) -> Result<Row> {
-    let image = crate::load(path)?;
+    let image = crate::load::load(path)?.image;
     let (width, height) = image.dimensions();
     let png = encode_as(&image, ImageFormat::Png)?;
     let oxipng = oxipng::optimize_from_memory(&png, &oxipng::Options::from_preset(OXIPNG_PRESET))
@@ -106,7 +106,23 @@ fn measure(path: &Path, options: EncodeOptions) -> Result<Row> {
     let t = Instant::now();
     let (_, _, decoded) = decode_rgba(&bic)?;
     let decode = t.elapsed();
-    ensure!(decoded == *image.as_raw(), "BIC roundtrip differs");
+    let psnr = if options.max_error == 0 {
+        ensure!(decoded == *image.as_raw(), "BIC roundtrip differs");
+        None
+    } else {
+        let worst = decoded
+            .iter()
+            .zip(image.as_raw())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        ensure!(
+            worst <= options.max_error,
+            "BIC error {worst} exceeds max_error {}",
+            options.max_error
+        );
+        Some(psnr(image.as_raw(), &decoded))
+    };
 
     Ok(Row {
         name: path.file_name().map_or_else(
@@ -122,7 +138,23 @@ fn measure(path: &Path, options: EncodeOptions) -> Result<Row> {
         bic: bic.len(),
         encode,
         decode,
+        psnr,
     })
+}
+
+/// PSNR in dB for 8-bit samples; infinite when the images are identical.
+fn psnr(a: &[u8], b: &[u8]) -> f64 {
+    let squared: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+        .sum();
+    let mse = squared / a.len().max(1) as f64;
+    if mse == 0.0 {
+        f64::INFINITY
+    } else {
+        10.0 * (255.0f64 * 255.0 / mse).log10()
+    }
 }
 
 fn encode_as(image: &RgbaImage, format: ImageFormat) -> Result<Vec<u8>> {
@@ -136,7 +168,8 @@ fn kib(bytes: usize) -> String {
 }
 
 fn print_table(rows: &[Row]) {
-    println!(
+    let lossy = rows.iter().any(|r| r.psnr.is_some());
+    print!(
         "{:<28} {:>11} {:>9} {:>9} {:>9} {:>9} {:>9} {:>8} {:>9} {:>9}",
         "image",
         "size",
@@ -149,13 +182,21 @@ fn print_table(rows: &[Row]) {
         "enc ms",
         "dec ms"
     );
+    println!(
+        "{}",
+        if lossy {
+            format!(" {:>8}", "PSNR dB")
+        } else {
+            String::new()
+        }
+    );
     for r in rows {
         let name: String = if r.name.chars().count() > 28 {
             r.name.chars().take(27).chain(['…']).collect()
         } else {
             r.name.clone()
         };
-        println!(
+        print!(
             "{:<28} {:>11} {:>9} {:>9} {:>9} {:>9} {:>9} {:>8.3} {:>9.1} {:>9.1}",
             name,
             format!("{}x{}", r.width, r.height),
@@ -167,6 +208,10 @@ fn print_table(rows: &[Row]) {
             r.bic as f64 / r.oxipng as f64,
             r.encode.as_secs_f64() * 1e3,
             r.decode.as_secs_f64() * 1e3,
+        );
+        println!(
+            "{}",
+            r.psnr.map_or(String::new(), |p| format!(" {:>8.2}", p))
         );
     }
 }
@@ -202,15 +247,18 @@ fn print_summary(rows: &[Row]) {
         );
     }
     println!("\nRatios below 1.000 mean BIC is smaller. Results depend on the corpus.");
+    if rows.iter().any(|r| r.psnr.is_some()) {
+        println!("BIC is near-lossless here; the other formats are lossless.");
+    }
 }
 
 fn write_csv(path: &Path, rows: &[Row]) -> Result<()> {
     let mut out = String::from(
-        "image,width,height,png,oxipng,webp_lossless,qoi,bic,bic_encode_ms,bic_decode_ms\n",
+        "image,width,height,png,oxipng,webp_lossless,qoi,bic,bic_encode_ms,bic_decode_ms,psnr_db\n",
     );
     for r in rows {
         out += &format!(
-            "\"{}\",{},{},{},{},{},{},{},{:.3},{:.3}\n",
+            "\"{}\",{},{},{},{},{},{},{},{:.3},{:.3},{}\n",
             r.name.replace('"', "\"\""),
             r.width,
             r.height,
@@ -221,6 +269,7 @@ fn write_csv(path: &Path, rows: &[Row]) -> Result<()> {
             r.bic,
             r.encode.as_secs_f64() * 1e3,
             r.decode.as_secs_f64() * 1e3,
+            r.psnr.map_or(String::new(), |p| format!("{p:.3}")),
         );
     }
     fs::write(path, out)?;

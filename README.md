@@ -48,9 +48,18 @@ as a library and a command-line tool with a small native viewer.
 - **PNG fallback**: optionally stores a PNG inside the container whenever it is
   smaller, so a lossless encode is never larger than the equivalent PNG.
 - **Wide input support**: PNG, JPEG, WebP, BMP, GIF, TIFF, HEIC and HEIF.
+  EXIF orientation is applied, so phone photos come out upright.
+- **ICC color profiles** are kept: read from the source image, stored in the
+  `.bic` file and written back when decoding to PNG.
 - **Bounded decoding**: memory and pixel limits are checked before anything is
   allocated.
-- **Desktop viewer** and a Windows file association for `.bic` files.
+- **Desktop viewer and converter**: `bic-view` opens `.bic` files and every
+  supported input format. **File > Open** (Ctrl+O) opens another image, and
+  **File > Save as BIC** (Ctrl+S) converts the current one to a lossless `.bic`
+  in the background, keeping its ICC profile. It runs without a console
+  window, opens on double-click through a Windows file association, shows
+  transparency over a checkerboard, keeps proportions when resized, and
+  reports errors in a dialog.
 
 ## Installation
 
@@ -68,24 +77,26 @@ cd bic
 cargo build --release
 ```
 
-The binary is written to `target/release/bic` (`bic.exe` on Windows).
+This builds two programs in `target/release`: `bic`, the command-line tool,
+and `bic-view`, the viewer (`.exe` on Windows).
 
 ## Command-line usage
 
 | Command | Description |
 | --- | --- |
 | `bic encode <input> <output.bic>` | Encode an image to BIC |
-| `bic decode <input.bic> <output>` | Decode to any format inferred from the output extension |
+| `bic decode <input.bic> <output>` | Decode to a format chosen by the output extension (PNG keeps the ICC profile) |
 | `bic view <file>` | Open a `.bic` or any supported image in the viewer (Esc closes it) |
-| `bic verify <original> <file.bic>` | Check that a lossless BIC decodes to exactly the original pixels |
-| `bic compare <paths>... [--fast-decode] [--csv out.csv]` | Benchmark lossless BIC against PNG, oxipng, WebP and QOI on files or folders |
-| `bic install-association` | Associate `.bic` with the viewer for the current Windows user |
+| `bic-view [file]` | The same viewer without a console window; without a file it asks for one |
+| `bic verify <original> <file.bic> [--max-error N]` | Check a BIC file against its original: exact, or within `N` |
+| `bic compare <paths>... [--max-error N] [--fast-decode] [--csv out.csv]` | Benchmark BIC against PNG, oxipng, WebP and QOI on files or folders; reports PSNR when `N > 0` |
+| `bic install-association` | Open `.bic` files with `bic-view` for the current Windows user |
 
 ### Encode options
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `--max-error <N>` | `0` | Largest allowed difference per sample. `0` is lossless. |
+| `--max-error <N>` | `0` | Largest allowed difference per sample. `0` is lossless. The encoder also tries lossless coding and keeps it when it is smaller. |
 | `--png-fallback` | off | Store a PNG instead when it is smaller (lossless encodes only). |
 | `--fast-decode` | off | Skip per-row prediction. On photographs: about 1 % larger, about 35 % faster to decode. No effect on flat graphics. |
 | `--zstd-level <N>` | `19` | Zstandard compression level (1–22). Higher levels shrink files; decoding speed barely changes. |
@@ -99,6 +110,7 @@ bic verify screenshot.png screenshot.bic
 
 # Near-lossless: no sample differs by more than 2
 bic encode photo.jpg photo.bic --max-error 2
+bic verify photo.jpg photo.bic --max-error 2
 
 # Faster to open, slightly larger
 bic encode photo.jpg photo.bic --fast-decode
@@ -112,15 +124,16 @@ bic decode screenshot.bic restored.png
 
 ### Windows file association
 
-After building a release executable, run once:
+After building, keep `bic` and `bic-view` in the same folder and run once:
 
 ```bash
 bic install-association
 ```
 
 This writes per-user keys under `HKCU\Software\Classes`, so double-clicking a
-`.bic` file opens it in the viewer. No administrator rights are needed, and
-nothing changes until you run the command.
+`.bic` file opens it in `bic-view`. No administrator rights are needed, and
+nothing changes until you run the command. If `bic-view` is missing, the
+association falls back to `bic view`, which also opens a console window.
 
 ## Library usage
 
@@ -149,7 +162,9 @@ fn roundtrip(width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<()> {
 ```
 
 Input and output are 8-bit RGBA in row-major order (`width × height × 4`
-bytes). Set `EncodeOptions::max_error` for near-lossless encoding.
+bytes). Set `EncodeOptions::max_error` for near-lossless encoding. To store
+or read an ICC profile, use `encode_rgba_with_metadata` and
+`decode_with_metadata`.
 
 ## How it works
 
@@ -209,7 +224,12 @@ photographs. CI reruns the synthetic benchmark on every push.
 
 - 8-bit RGBA only. 16-bit images are reduced to 8 bits on load.
 - One color transform (subtract green).
-- ICC color profiles and EXIF orientation are not preserved.
+- ICC profiles are stored but not applied: the viewer shows raw RGB values.
+- The viewer window keeps its first size; images of another shape opened
+  later are letterboxed.
+- Decoding to formats other than PNG drops the ICC profile, and JPEG output
+  drops transparency.
+- Other EXIF metadata (camera, GPS, dates) is not kept.
 - No animation or progressive decoding.
 - Encoding is slow by design (about a minute for a 20-megapixel photo).
 - Rows that use the left, average, Paeth or MED rules decode sequentially,
@@ -227,8 +247,10 @@ photographs. CI reruns the synthetic benchmark on every push.
 - [x] Per-row predictor choice (left, average, Paeth, MED)
 - [x] Image corpus and regression benchmarks against PNG, oxipng, WebP lossless and QOI
 - [x] Decoder fuzzing (`cargo-fuzz`) and property-based roundtrip tests
-- [ ] Viewer without a console window, with frame-rate limiting
-- [ ] EXIF orientation and ICC profile handling
+- [x] Viewer without a console window, with frame-rate limiting
+- [x] EXIF orientation and ICC profile handling
+- [x] Open any supported image in the viewer and save it as BIC
+- [ ] Color-managed display in the viewer
 
 ## Development
 

@@ -1,10 +1,14 @@
 mod bench;
+mod load;
+mod viewer;
 
-use anyhow::{ensure, Context, Result};
-use bic::{decode_rgba_with_limits, encode_rgba, is_png_fallback, DecodeLimits, EncodeOptions};
+use anyhow::{bail, ensure, Context, Result};
+use bic::{
+    decode_with_metadata, encode_rgba_with_metadata, is_png_fallback, DecodeLimits, Decoded,
+    EncodeOptions, Metadata,
+};
 use clap::{Parser, Subcommand};
-use heic_rs::{DecodeOptions, PixelLayout};
-use minifb::{Key, Window, WindowOptions};
+use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -23,6 +27,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Encode an image to BIC
     Encode {
         input: PathBuf,
         output: PathBuf,
@@ -38,21 +43,25 @@ enum Command {
         #[arg(long, default_value_t = 19)]
         zstd_level: i32,
     },
-    Decode {
-        input: PathBuf,
-        output: PathBuf,
-    },
-    View {
-        input: PathBuf,
-    },
+    /// Decode a BIC file; the output format follows the extension
+    Decode { input: PathBuf, output: PathBuf },
+    /// Show a BIC file or any supported image in a window (Esc closes it)
+    View { input: PathBuf },
+    /// Check a BIC file against its original image
     Verify {
         input: PathBuf,
         bic: PathBuf,
+        /// Accept differences up to this value (for near-lossless files)
+        #[arg(long, default_value_t = 0)]
+        max_error: u8,
     },
-    /// Compare lossless BIC with PNG, oxipng, WebP and QOI on images or folders
+    /// Compare BIC with PNG, oxipng, WebP and QOI on images or folders
     Compare {
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
+        /// Largest allowed per-sample error; reports PSNR when above 0
+        #[arg(long, default_value_t = 0)]
+        max_error: u8,
         /// Only use predictors that decode fastest (larger files on photos)
         #[arg(long)]
         fast_decode: bool,
@@ -62,84 +71,72 @@ enum Command {
         #[arg(long)]
         csv: Option<PathBuf>,
     },
+    /// Open .bic files with bic-view for the current Windows user
     InstallAssociation,
 }
 
-pub(crate) fn load(path: &Path) -> Result<image::RgbaImage> {
-    let data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let ext = path
-        .extension()
-        .and_then(|x| x.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if ext == "heic" || ext == "heif" {
-        let options = DecodeOptions::default()
-            .with_layout(PixelLayout::Rgba8)
-            .with_alpha(true);
-        let decoded = heic_rs::decode(&data, &options).context("decoding HEIC/HEIF")?;
-        return image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.data)
-            .context("invalid HEIC RGBA dimensions");
-    }
-    Ok(image::load_from_memory(&data)?.to_rgba8())
-}
-
-fn read_bic(path: &Path, limits: DecodeLimits) -> Result<(u32, u32, Vec<u8>)> {
+fn read_bic(path: &Path, limits: DecodeLimits) -> Result<Decoded> {
     let file = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    decode_rgba_with_limits(&file, limits).with_context(|| format!("decoding {}", path.display()))
+    decode_with_metadata(&file, limits).with_context(|| format!("decoding {}", path.display()))
 }
 
-fn view(path: &Path, limits: DecodeLimits) -> Result<()> {
-    let (title, image) = if path
+/// Writes a decoded image. PNG output keeps the ICC profile; other formats
+/// are written by the `image` crate without it.
+fn write_image(path: &Path, decoded: Decoded) -> Result<()> {
+    let is_png = path
         .extension()
-        .is_some_and(|x| x.eq_ignore_ascii_case("bic"))
-    {
-        let (w, h, p) = read_bic(path, limits)?;
-        (
-            format!("BIC viewer — {}", path.display()),
-            image::RgbaImage::from_raw(w, h, p).context("invalid BIC image")?,
-        )
-    } else {
-        (format!("BIC viewer — {}", path.display()), load(path)?)
-    };
-    let scale = (1600.0 / image.width() as f32)
-        .min(1000.0 / image.height() as f32)
-        .min(1.0);
-    let w = (image.width() as f32 * scale).round().max(1.0) as u32;
-    let h = (image.height() as f32 * scale).round().max(1.0) as u32;
-    let displayed = if (w, h) == (image.width(), image.height()) {
-        image
-    } else {
-        image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle)
-    };
-    let pixels: Vec<u32> = displayed
-        .pixels()
-        .map(|p| {
-            let a = p[3] as u32;
-            let bg = 36;
-            let r = (p[0] as u32 * a + bg * (255 - a)) / 255;
-            let g = (p[1] as u32 * a + bg * (255 - a)) / 255;
-            let b = (p[2] as u32 * a + bg * (255 - a)) / 255;
-            (r << 16) | (g << 8) | b
-        })
-        .collect();
-    let mut window = Window::new(
-        &title,
-        w as usize,
-        h as usize,
-        WindowOptions {
-            resize: true,
-            ..Default::default()
-        },
-    )?;
-    while window.is_open() && !window.is_key_down(Key::Escape) {
-        window.update_with_buffer(&pixels, w as usize, h as usize)?;
+        .is_some_and(|x| x.eq_ignore_ascii_case("png"));
+    if is_png {
+        let file =
+            fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+        let mut encoder = PngEncoder::new(std::io::BufWriter::new(file));
+        if let Some(icc) = decoded.metadata.icc_profile {
+            encoder.set_icc_profile(icc)?;
+        }
+        encoder.write_image(
+            &decoded.rgba,
+            decoded.width,
+            decoded.height,
+            ExtendedColorType::Rgba8,
+        )?;
+        return Ok(());
     }
-    Ok(())
+    if decoded.metadata.icc_profile.is_some() {
+        eprintln!("note: the ICC profile is only written to PNG output");
+    }
+    let image = image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.rgba)
+        .context("decoded size mismatch")?;
+    let no_alpha = path.extension().is_some_and(|x| {
+        ["jpg", "jpeg"]
+            .iter()
+            .any(|ext| x.eq_ignore_ascii_case(ext))
+    });
+    let result = if no_alpha {
+        // JPEG has no alpha channel.
+        if image.pixels().any(|p| p[3] != 255) {
+            eprintln!("note: transparency is dropped in JPEG output");
+        }
+        image::DynamicImage::ImageRgba8(image).to_rgb8().save(path)
+    } else {
+        image.save(path)
+    };
+    result.with_context(|| format!("writing {}", path.display()))
 }
 
 fn install_association() -> Result<()> {
     let exe = std::env::current_exe()?;
-    let open = format!("\"{}\" view \"%1\"", exe.display());
+    // Prefer the console-less viewer next to this executable, so double-
+    // clicking a file does not open a terminal window.
+    let viewer = exe.with_file_name(format!("bic-view{}", std::env::consts::EXE_SUFFIX));
+    let open = if viewer.is_file() {
+        format!("\"{}\" \"%1\"", viewer.display())
+    } else {
+        eprintln!(
+            "note: {} not found; using `bic view`, which opens a console window",
+            viewer.display()
+        );
+        format!("\"{}\" view \"%1\"", exe.display())
+    };
     for (key, value) in [
         (r"HKCU\Software\Classes\.bic", "BIC.Image"),
         (r"HKCU\Software\Classes\BIC.Image", "BIC image"),
@@ -150,10 +147,7 @@ fn install_association() -> Result<()> {
             .status()?;
         ensure!(status.success(), "could not register {key}");
     }
-    println!(
-        ".bic is associated with {} for this Windows user",
-        exe.display()
-    );
+    println!(".bic files now open with: {open}");
     Ok(())
 }
 
@@ -172,53 +166,82 @@ fn main() -> Result<()> {
             fast_decode,
             zstd_level,
         } => {
-            let i = load(&input)?;
-            let f = encode_rgba(
-                i.width(),
-                i.height(),
-                i.as_raw(),
-                EncodeOptions {
-                    max_error,
-                    png_fallback,
-                    fast_decode,
-                    zstd_level,
-                },
+            let loaded = load::load(&input)?;
+            for note in &loaded.notes {
+                eprintln!("note: {note}");
+            }
+            let image = &loaded.image;
+            let metadata = Metadata {
+                icc_profile: loaded.icc_profile.clone(),
+            };
+            let options = EncodeOptions {
+                max_error,
+                png_fallback,
+                fast_decode,
+                zstd_level,
+            };
+            let f = encode_rgba_with_metadata(
+                image.width(),
+                image.height(),
+                image.as_raw(),
+                &metadata,
+                options,
             )?;
             fs::write(&output, &f)?;
             println!(
-                "wrote {} bytes ({})",
+                "wrote {} bytes ({}{})",
                 f.len(),
                 if is_png_fallback(&f)? {
                     "PNG fallback"
                 } else {
                     "native BIC"
+                },
+                if metadata.icc_profile.is_some() {
+                    ", with ICC profile"
+                } else {
+                    ""
                 }
             );
         }
-        Command::Decode { input, output } => {
-            let (w, h, p) = read_bic(&input, limits)?;
-            image::RgbaImage::from_raw(w, h, p)
-                .context("decoded size mismatch")?
-                .save(&output)
-                .with_context(|| format!("writing {}", output.display()))?;
-        }
-        Command::View { input } => view(&input, limits)?,
-        Command::Verify { input, bic } => {
-            let original = load(&input)?;
-            let (w, h, p) = read_bic(&bic, limits)?;
+        Command::Decode { input, output } => write_image(&output, read_bic(&input, limits)?)?,
+        Command::View { input } => viewer::view(Some(&input), limits)?,
+        Command::Verify {
+            input,
+            bic,
+            max_error,
+        } => {
+            let original = load::load(&input)?.image;
+            let d = read_bic(&bic, limits)?;
             ensure!(
-                w == original.width() && h == original.height() && p == *original.as_raw(),
-                "roundtrip pixels differ"
+                (d.width, d.height) == original.dimensions(),
+                "dimensions differ: {}x{} vs {}x{}",
+                d.width,
+                d.height,
+                original.width(),
+                original.height()
             );
-            println!("exact pixel roundtrip verified");
+            let worst = d
+                .rgba
+                .iter()
+                .zip(original.as_raw())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            match worst {
+                0 => println!("exact pixel roundtrip verified"),
+                n if n <= max_error => println!("verified: samples differ by at most {n}"),
+                n => bail!("samples differ by up to {n} (allowed: {max_error})"),
+            }
         }
         Command::Compare {
             inputs,
+            max_error,
             fast_decode,
             zstd_level,
             csv,
         } => {
             let options = EncodeOptions {
+                max_error,
                 fast_decode,
                 zstd_level,
                 ..Default::default()

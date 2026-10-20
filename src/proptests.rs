@@ -122,8 +122,8 @@ proptest! {
     #[test]
     fn every_candidate_meets_its_error_bound((w, h, p) in image(), max_error in prop_oneof![Just(0u8), 1u8..=60]) {
         let (palette, list) = candidates(&p, max_error, false);
-        for (transform, predictor) in list {
-            let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, max_error).unwrap();
+        for (transform, predictor, error) in list {
+            let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, error).unwrap();
             let (_, _, d) = decode_native(w, h, &plain).unwrap();
             prop_assert_eq!(d.len(), p.len());
             prop_assert!(p.iter().zip(&d).all(|(a, b)| a.abs_diff(*b) <= max_error), "{:?}/{:?}", transform, predictor);
@@ -159,8 +159,8 @@ proptest! {
     ) {
         // Mutating the plain stream (not the Zstd bytes) reaches the parser.
         let (palette, list) = candidates(&p, max_error, false);
-        let (transform, predictor) = list[pick as usize];
-        let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, max_error).unwrap();
+        let (transform, predictor, error) = list[pick as usize];
+        let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, error).unwrap();
         let _ = decode_native(w, h, &mutate(plain, &edits, cut, &tail));
     }
 
@@ -168,13 +168,15 @@ proptest! {
     fn mutated_container_never_panics(
         (w, h, p) in image(),
         png_fallback: bool,
+        icc in prop::option::of(prop::collection::vec(any::<u8>(), 0..40)),
         edits in prop::collection::vec((any::<usize>(), any::<u8>()), 0..6),
         cut in prop::option::of(any::<usize>()),
         tail in prop::collection::vec(any::<u8>(), 0..4),
     ) {
         let options = EncodeOptions { png_fallback, ..Default::default() };
-        let file = encode_rgba(w, h, &p, options).unwrap();
-        let _ = decode_rgba_with_limits(&mutate(file, &edits, cut, &tail), SMALL);
+        let metadata = Metadata { icc_profile: icc };
+        let file = encode_rgba_with_metadata(w, h, &p, &metadata, options).unwrap();
+        let _ = decode_with_metadata(&mutate(file, &edits, cut, &tail), SMALL);
     }
 
     #[test]

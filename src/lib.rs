@@ -7,6 +7,10 @@ const STORAGE_NATIVE: u8 = 0;
 const STORAGE_PNG: u8 = 1;
 const MAX_PIXELS: usize = 100_000_000;
 const MAX_PALETTE: usize = 256;
+const HEADER_LEN: usize = 32;
+/// Container flag: an ICC profile follows the header.
+const FLAG_ICC: u16 = 1;
+const MAX_ICC: usize = 16 << 20;
 const BLOCK_SIZES: [usize; 3] = [256, 1024, 4096];
 const BLOCK_HEADER: usize = 7;
 const RLE_BITS: [u8; 4] = [4, 8, 12, 16];
@@ -136,10 +140,38 @@ impl Quantizer {
     }
 }
 
+/// Metadata stored alongside the pixels.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Metadata {
+    /// ICC color profile of the pixels, stored as is. BIC applies no color
+    /// management itself.
+    pub icc_profile: Option<Vec<u8>>,
+}
+
+/// A decoded image.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Decoded {
+    pub width: u32,
+    pub height: u32,
+    /// 8-bit RGBA in row-major order.
+    pub rgba: Vec<u8>,
+    pub metadata: Metadata,
+}
+
 pub fn encode_rgba(
     width: u32,
     height: u32,
     rgba: &[u8],
+    options: EncodeOptions,
+) -> Result<Vec<u8>> {
+    encode_rgba_with_metadata(width, height, rgba, &Metadata::default(), options)
+}
+
+pub fn encode_rgba_with_metadata(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    metadata: &Metadata,
     options: EncodeOptions,
 ) -> Result<Vec<u8>> {
     let pixels = checked_pixels(width, height, MAX_PIXELS)?;
@@ -147,27 +179,27 @@ pub fn encode_rgba(
         rgba.len() == pixels * 4,
         "RGBA byte count does not match dimensions"
     );
+    let icc = metadata.icc_profile.as_deref();
+    if let Some(icc) = icc {
+        ensure!(icc.len() <= MAX_ICC, "ICC profile exceeds {MAX_ICC} bytes");
+    }
     let (palette, candidates) = candidates(rgba, options.max_error, options.fast_decode);
-    let encode = |(transform, predictor)| -> Result<Vec<u8>> {
+    let encode = |(transform, predictor, error): Candidate| -> Result<(usize, Vec<u8>)> {
         let plain = native_stream(
             width as usize,
             rgba,
             palette.as_ref(),
             transform,
             predictor,
-            options.max_error,
+            error,
         )?;
-        let packed = zstd::bulk::compress(&plain, options.zstd_level)?;
-        Ok(container(
-            width,
-            height,
-            STORAGE_NATIVE,
-            plain.len() as u64,
-            &packed,
+        Ok((
+            plain.len(),
+            zstd::bulk::compress(&plain, options.zstd_level)?,
         ))
     };
     // Candidates are independent, so they are encoded in parallel.
-    let files: Vec<Result<Vec<u8>>> = std::thread::scope(|scope| {
+    let results: Vec<Result<(usize, Vec<u8>)>> = std::thread::scope(|scope| {
         let handles: Vec<_> = candidates
             .into_iter()
             .map(|c| scope.spawn(move || encode(c)))
@@ -177,53 +209,67 @@ pub fn encode_rgba(
             .map(|h| h.join().expect("encoder thread panicked"))
             .collect()
     });
-    let mut native: Option<Vec<u8>> = None;
-    for file in files {
-        let file = file?;
-        if native.as_ref().is_none_or(|b| file.len() < b.len()) {
-            native = Some(file);
+    let mut best: Option<(usize, Vec<u8>)> = None;
+    for result in results {
+        let (plain_len, packed) = result?;
+        if best.as_ref().is_none_or(|b| packed.len() < b.1.len()) {
+            best = Some((plain_len, packed));
         }
     }
-    let native = native.context("no encoding candidate")?;
+    let (plain_len, packed) = best.context("no encoding candidate")?;
     // PNG cannot represent an empty image, so those always stay native.
     if options.png_fallback && options.max_error == 0 && pixels > 0 {
         let png = png_bytes(width, height, rgba)?;
-        if png.len() <= native.len() {
-            return Ok(container(
+        if png.len() <= packed.len() {
+            let len = png.len() as u64;
+            return Ok(container_with_icc(
                 width,
                 height,
                 STORAGE_PNG,
-                png.len() as u64,
+                len,
+                icc,
                 &png,
             ));
         }
     }
-    Ok(native)
+    let len = plain_len as u64;
+    Ok(container_with_icc(
+        width,
+        height,
+        STORAGE_NATIVE,
+        len,
+        icc,
+        &packed,
+    ))
 }
 
+/// One way to encode an image.
+type Candidate = (Transform, Predictor, u8);
+
 /// The encodings to try for this image: every valid transform and predictor
-/// combination (without per-row prediction when `fast_decode` is set).
-/// Encoding time is not a priority, so the encoder simply keeps whichever is
-/// smallest.
-fn candidates(
-    rgba: &[u8],
-    max_error: u8,
-    fast_decode: bool,
-) -> (Option<Palette>, Vec<(Transform, Predictor)>) {
-    let palette = (max_error == 0).then(|| build_palette(rgba)).flatten();
-    let mut transforms = vec![Transform::Direct, Transform::SubtractGreen];
-    if palette.is_some() {
-        transforms.push(Transform::Palette);
-    }
+/// combination (without per-row prediction when `fast_decode` is set). For a
+/// near-lossless request the lossless encodings are tried too, since an exact
+/// file meets any error bound and a palette can beat lossy coding on flat
+/// graphics. Encoding time is not a priority, so the encoder simply keeps
+/// whichever is smallest.
+fn candidates(rgba: &[u8], max_error: u8, fast_decode: bool) -> (Option<Palette>, Vec<Candidate>) {
+    let palette = build_palette(rgba);
     let predictors: &[Predictor] = if fast_decode {
         &[Predictor::None, Predictor::Up]
     } else {
         &[Predictor::None, Predictor::Up, Predictor::PerRow]
     };
-    let list = transforms
-        .into_iter()
-        .flat_map(|t| predictors.iter().map(move |&p| (t, p)))
-        .collect();
+    let errors: &[u8] = if max_error > 0 { &[max_error, 0] } else { &[0] };
+    let mut list = Vec::new();
+    for &error in errors {
+        let mut transforms = vec![Transform::Direct, Transform::SubtractGreen];
+        if error == 0 && palette.is_some() {
+            transforms.push(Transform::Palette);
+        }
+        for transform in transforms {
+            list.extend(predictors.iter().map(|&p| (transform, p, error)));
+        }
+    }
     (palette, list)
 }
 
@@ -259,37 +305,60 @@ pub fn decode_rgba(file: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
 }
 
 pub fn decode_rgba_with_limits(file: &[u8], limits: DecodeLimits) -> Result<(u32, u32, Vec<u8>)> {
-    let (width, height, storage, plain_len, payload) = parse_container(file, limits.max_pixels)?;
+    let d = decode_with_metadata(file, limits)?;
+    Ok((d.width, d.height, d.rgba))
+}
+
+/// Decodes pixels and metadata.
+pub fn decode_with_metadata(file: &[u8], limits: DecodeLimits) -> Result<Decoded> {
+    let c = parse_container(file, limits.max_pixels)?;
+    let (width, height) = (c.width, c.height);
     let pixels = width as usize * height as usize;
-    if storage == STORAGE_PNG {
+    let metadata = Metadata {
+        icc_profile: c.icc.map(|icc| icc.to_vec()),
+    };
+    let icc_len = c.icc.map_or(0, |icc| icc.len());
+    if c.storage == STORAGE_PNG {
         ensure!(
-            pixels.checked_mul(4).is_some_and(|n| n <= limits.max_alloc),
+            pixels
+                .checked_mul(4)
+                .and_then(|n| n.checked_add(icc_len))
+                .is_some_and(|n| n <= limits.max_alloc),
             "image exceeds decode memory limit"
         );
         let mut png_limits = image::Limits::default();
         png_limits.max_image_width = Some(width);
         png_limits.max_image_height = Some(height);
         png_limits.max_alloc = Some(limits.max_alloc as u64);
-        let mut reader =
-            image::ImageReader::with_format(std::io::Cursor::new(payload), image::ImageFormat::Png);
+        let mut reader = image::ImageReader::with_format(
+            std::io::Cursor::new(c.payload),
+            image::ImageFormat::Png,
+        );
         reader.limits(png_limits);
         let image = reader.decode()?.to_rgba8();
         ensure!(
             image.width() == width && image.height() == height,
             "PNG dimensions contradict BIC header"
         );
-        return Ok((width, height, image.into_raw()));
+        return Ok(Decoded {
+            width,
+            height,
+            rgba: image.into_raw(),
+            metadata,
+        });
     }
     ensure!(
-        storage == STORAGE_NATIVE,
-        "unsupported storage type {storage}"
+        c.storage == STORAGE_NATIVE,
+        "unsupported storage type {}",
+        c.storage
     );
     // Peak working set of decode_native: RGBA output, the decoded green plane
     // and the plane being decoded, on top of the decompressed stream itself.
-    let plain_len = usize::try_from(plain_len).context("plain length overflow")?;
+    let plain_len = usize::try_from(c.plain_len).context("plain length overflow")?;
     let needed = pixels
         .checked_mul(6)
         .and_then(|n| n.checked_add(plain_len))
+        .and_then(|n| n.checked_add(icc_len))
         .context("decode size overflow")?;
     ensure!(
         needed <= limits.max_alloc,
@@ -297,13 +366,19 @@ pub fn decode_rgba_with_limits(file: &[u8], limits: DecodeLimits) -> Result<(u32
     );
     // Bounded decompression: a payload that inflates past plain_len fails
     // instead of growing without limit.
-    let plain = zstd::bulk::decompress(payload, plain_len).context("Zstd payload")?;
+    let plain = zstd::bulk::decompress(c.payload, plain_len).context("Zstd payload")?;
     ensure!(plain.len() == plain_len, "Zstd output length mismatch");
-    decode_native(width, height, &plain)
+    let (_, _, rgba) = decode_native(width, height, &plain)?;
+    Ok(Decoded {
+        width,
+        height,
+        rgba,
+        metadata,
+    })
 }
 
 pub fn is_png_fallback(file: &[u8]) -> Result<bool> {
-    Ok(parse_container(file, MAX_PIXELS)?.2 == STORAGE_PNG)
+    Ok(parse_container(file, MAX_PIXELS)?.storage == STORAGE_PNG)
 }
 
 fn checked_pixels(width: u32, height: u32, max_pixels: usize) -> Result<usize> {
@@ -314,35 +389,80 @@ fn checked_pixels(width: u32, height: u32, max_pixels: usize) -> Result<usize> {
     Ok(count)
 }
 
+#[cfg(test)]
 fn container(width: u32, height: u32, storage: u8, plain_len: u64, payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + payload.len());
+    container_with_icc(width, height, storage, plain_len, None, payload)
+}
+
+fn container_with_icc(
+    width: u32,
+    height: u32,
+    storage: u8,
+    plain_len: u64,
+    icc: Option<&[u8]>,
+    payload: &[u8],
+) -> Vec<u8> {
+    let icc_bytes = icc.map_or(0, |i| 4 + i.len());
+    let mut out = Vec::with_capacity(HEADER_LEN + icc_bytes + payload.len());
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
     out.push(storage);
-    put_u16(&mut out, 0);
+    put_u16(&mut out, if icc.is_some() { FLAG_ICC } else { 0 });
     put_u32(&mut out, width);
     put_u32(&mut out, height);
     put_u64(&mut out, plain_len);
     put_u64(&mut out, payload.len() as u64);
+    if let Some(icc) = icc {
+        put_u32(&mut out, icc.len() as u32);
+        out.extend_from_slice(icc);
+    }
     out.extend_from_slice(payload);
     out
 }
 
-fn parse_container(file: &[u8], max_pixels: usize) -> Result<(u32, u32, u8, u64, &[u8])> {
-    ensure!(file.len() >= 32 && &file[..4] == MAGIC, "not a BIC2 file");
+struct Container<'a> {
+    width: u32,
+    height: u32,
+    storage: u8,
+    plain_len: u64,
+    icc: Option<&'a [u8]>,
+    payload: &'a [u8],
+}
+
+fn parse_container(file: &[u8], max_pixels: usize) -> Result<Container<'_>> {
+    ensure!(
+        file.len() >= HEADER_LEN && &file[..4] == MAGIC,
+        "not a BIC2 file"
+    );
     ensure!(file[4] == VERSION, "unsupported BIC version");
     let storage = file[5];
-    ensure!(file[6..8] == [0, 0], "unsupported BIC flags");
+    let flags = u16::from_le_bytes([file[6], file[7]]);
+    ensure!(flags & !FLAG_ICC == 0, "unsupported BIC flags");
     let width = get_u32(file, 8)?;
     let height = get_u32(file, 12)?;
     checked_pixels(width, height, max_pixels)?;
     let plain_len = get_u64(file, 16)?;
     let payload_len = get_u64(file, 24)?;
+    let mut at = HEADER_LEN;
+    let icc = if flags & FLAG_ICC != 0 {
+        let len = read_u32(file, &mut at)? as usize;
+        ensure!(len <= MAX_ICC, "ICC profile exceeds {MAX_ICC} bytes");
+        Some(take(file, &mut at, len).context("truncated ICC profile")?)
+    } else {
+        None
+    };
     ensure!(
-        (file.len() - 32) as u64 == payload_len,
+        (file.len() - at) as u64 == payload_len,
         "container payload length mismatch"
     );
-    Ok((width, height, storage, plain_len, &file[32..]))
+    Ok(Container {
+        width,
+        height,
+        storage,
+        plain_len,
+        icc,
+        payload: &file[at..],
+    })
 }
 
 /// Prediction rule for one row of samples.
@@ -973,9 +1093,9 @@ mod tests {
         }
         for rgba in [few_colors, many_colors] {
             let (palette, list) = candidates(&rgba, 0, false);
-            for (transform, predictor) in list {
-                let plain =
-                    native_stream(41, &rgba, palette.as_ref(), transform, predictor, 0).unwrap();
+            for (transform, predictor, error) in list {
+                let plain = native_stream(41, &rgba, palette.as_ref(), transform, predictor, error)
+                    .unwrap();
                 let decoded = decode_native(41, 23, &plain).unwrap().2;
                 assert_eq!(decoded, rgba, "{transform:?}/{predictor:?}");
             }
@@ -983,9 +1103,9 @@ mod tests {
     }
     /// The predictor byte of a native file's stream.
     pub(crate) fn stored_predictor(file: &[u8]) -> Option<u8> {
-        let (_, _, storage, plain_len, payload) = parse_container(file, MAX_PIXELS).unwrap();
-        (storage == STORAGE_NATIVE)
-            .then(|| zstd::bulk::decompress(payload, plain_len as usize).unwrap()[1])
+        let c = parse_container(file, MAX_PIXELS).unwrap();
+        (c.storage == STORAGE_NATIVE)
+            .then(|| zstd::bulk::decompress(c.payload, c.plain_len as usize).unwrap()[1])
     }
     #[test]
     fn fast_decode_never_uses_per_row_prediction() {
@@ -1009,6 +1129,50 @@ mod tests {
         assert!(stored_predictor(&fast).unwrap() < Predictor::PerRow as u8);
         assert_eq!(decode_rgba(&fast).unwrap().2, p);
         assert!(default.len() <= fast.len());
+    }
+    #[test]
+    fn icc_profile_roundtrips_in_both_storages() {
+        let icc: Vec<u8> = (0..=255).cycle().take(3000).collect();
+        let metadata = Metadata {
+            icc_profile: Some(icc.clone()),
+        };
+        let p = vec![9u8; 8 * 8 * 4];
+        let native =
+            encode_rgba_with_metadata(8, 8, &p, &metadata, EncodeOptions::default()).unwrap();
+        let png = png_bytes(8, 8, &p).unwrap();
+        let fallback = container_with_icc(8, 8, STORAGE_PNG, png.len() as u64, Some(&icc), &png);
+        for file in [native, fallback] {
+            let d = decode_with_metadata(&file, DecodeLimits::default()).unwrap();
+            assert_eq!(
+                (d.rgba, d.metadata.icc_profile),
+                (p.clone(), Some(icc.clone()))
+            );
+        }
+        let plain = encode_rgba(8, 8, &p, EncodeOptions::default()).unwrap();
+        let d = decode_with_metadata(&plain, DecodeLimits::default()).unwrap();
+        assert_eq!(d.metadata, Metadata::default());
+    }
+    #[test]
+    fn rejects_bad_icc_container_fields() {
+        let metadata = Metadata {
+            icc_profile: Some(vec![1, 2, 3]),
+        };
+        let p = vec![9u8; 4];
+        let file =
+            encode_rgba_with_metadata(1, 1, &p, &metadata, EncodeOptions::default()).unwrap();
+        // ICC length pointing past the end of the file.
+        let mut long = file.clone();
+        long[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_rgba(&long).is_err());
+        // Unknown flag bit next to the ICC flag.
+        let mut flags = file.clone();
+        flags[6] |= 2;
+        assert!(decode_rgba(&flags).is_err());
+        // Oversized profiles are refused when encoding.
+        let huge = Metadata {
+            icc_profile: Some(vec![0; MAX_ICC + 1]),
+        };
+        assert!(encode_rgba_with_metadata(1, 1, &p, &huge, EncodeOptions::default()).is_err());
     }
     #[test]
     fn quantizer_bounds_error_for_every_input() {

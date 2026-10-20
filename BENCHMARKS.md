@@ -72,6 +72,13 @@ left, average, Paeth and MED rows depend on the sample just decoded. On the
 flat-graphics corpus every image decodes in under 2 ms. Encoding the
 20-megapixel photo takes about a minute.
 
+### Near-lossless (`--max-error 2`)
+
+On the synthetic corpus, BIC2 near-lossless reaches 0.656 geometric mean
+against (lossless) oxipng and is smaller on 7 of 7 images. Flat graphics stay
+exact, because the encoder keeps a lossless palette encoding whenever it is
+smaller than the lossy one. `compare --max-error N` reports PSNR per image.
+
 ### How BIC2 was chosen
 
 A separate experiment encoded both corpora with every combination of:

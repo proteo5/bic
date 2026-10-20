@@ -18,6 +18,7 @@ heic-rs = "0.1.4"
 minifb = "0.28"
 zstd = "0.13"
 oxipng = { version = "10.2.1", default-features = false, features = ["parallel"] }
+rfd = "0.17"
 
 [dev-dependencies]
 proptest = "1"
