@@ -1268,7 +1268,12 @@ mod tests {
         let img = image::RgbaImage::from_fn(120, 80, |x, y| {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let n = (seed >> 27) as u8;
-            image::Rgba([(x * 2) as u8 ^ n, (y * 3) as u8 + n, (x + y) as u8, 255])
+            image::Rgba([
+                (x * 2) as u8 ^ n,
+                ((y * 3) as u8).wrapping_add(n),
+                (x + y) as u8,
+                255,
+            ])
         });
         source::tests::jpeg_with_orientation(&img, 1)
     }
