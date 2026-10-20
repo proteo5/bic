@@ -32,7 +32,7 @@ enum Command {
         /// Store a PNG instead when it is smaller (lossless only)
         #[arg(long)]
         png_fallback: bool,
-        #[arg(long, default_value_t = 9)]
+        #[arg(long, default_value_t = 19)]
         zstd_level: i32,
     },
     Decode {
@@ -50,7 +50,7 @@ enum Command {
     Compare {
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
-        #[arg(long, default_value_t = 9)]
+        #[arg(long, default_value_t = 19)]
         zstd_level: i32,
         /// Also write per-image results to this CSV file
         #[arg(long)]

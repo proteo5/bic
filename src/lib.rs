@@ -48,7 +48,7 @@ impl Default for EncodeOptions {
         Self {
             max_error: 0,
             png_fallback: false,
-            zstd_level: 9,
+            zstd_level: 19,
         }
     }
 }
@@ -65,9 +65,12 @@ enum Transform {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Predictor {
+    /// `RowPredictor::None` on every row.
     None = 0,
-    /// Sample above; the first row uses the sample to the left.
+    /// `RowPredictor::Up` on every row.
     Up = 1,
+    /// A `RowPredictor` per row, stored before the symbols.
+    PerRow = 2,
 }
 
 struct Palette {
@@ -107,14 +110,18 @@ impl Quantizer {
         q.rem_euclid(self.range) as u8
     }
 
-    fn reconstruct(&self, prediction: i32, symbol: u8) -> u8 {
+    /// The signed quantized residual a symbol stands for.
+    fn signed(&self, symbol: u8) -> i32 {
         let s = symbol as i32;
-        let q = if s >= (self.range + 1) / 2 {
+        if s >= (self.range + 1) / 2 {
             s - self.range
         } else {
             s
-        };
-        let mut r = prediction + q * self.step;
+        }
+    }
+
+    fn reconstruct(&self, prediction: i32, symbol: u8) -> u8 {
+        let mut r = prediction + self.signed(symbol) * self.step;
         if r < -self.near {
             r += self.range * self.step;
         } else if r > 255 + self.near {
@@ -189,22 +196,19 @@ pub fn encode_rgba(
     Ok(native)
 }
 
-/// The encodings worth trying for this image. Measured on the benchmark
-/// corpora, these two per case capture almost all of the gain of trying every
-/// transform and predictor combination (see BENCHMARKS.md).
+/// The encodings to try for this image: every valid transform and predictor
+/// combination. Encoding time is not a priority, so the encoder simply keeps
+/// whichever is smallest.
 fn candidates(rgba: &[u8], max_error: u8) -> (Option<Palette>, Vec<(Transform, Predictor)>) {
     let palette = (max_error == 0).then(|| build_palette(rgba)).flatten();
-    let list = if palette.is_some() {
-        vec![
-            (Transform::Palette, Predictor::None),
-            (Transform::Palette, Predictor::Up),
-        ]
-    } else {
-        vec![
-            (Transform::Direct, Predictor::None),
-            (Transform::SubtractGreen, Predictor::Up),
-        ]
-    };
+    let mut transforms = vec![Transform::Direct, Transform::SubtractGreen];
+    if palette.is_some() {
+        transforms.push(Transform::Palette);
+    }
+    let list = transforms
+        .into_iter()
+        .flat_map(|t| [Predictor::None, Predictor::Up, Predictor::PerRow].map(|p| (t, p)))
+        .collect();
     (palette, list)
 }
 
@@ -326,10 +330,77 @@ fn parse_container(file: &[u8], max_pixels: usize) -> Result<(u32, u32, u8, u64,
     Ok((width, height, storage, plain_len, &file[32..]))
 }
 
+/// Prediction rule for one row of samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowPredictor {
+    None = 0,
+    Left = 1,
+    Up = 2,
+    Average = 3,
+    Paeth = 4,
+    /// Median edge detector from LOCO-I / JPEG-LS.
+    Med = 5,
+}
+
+const ROW_PREDICTORS: [RowPredictor; 6] = [
+    RowPredictor::None,
+    RowPredictor::Left,
+    RowPredictor::Up,
+    RowPredictor::Average,
+    RowPredictor::Paeth,
+    RowPredictor::Med,
+];
+
+impl RowPredictor {
+    fn from_byte(v: u8) -> Result<Self> {
+        ROW_PREDICTORS
+            .get(v as usize)
+            .copied()
+            .with_context(|| format!("invalid row predictor {v}"))
+    }
+}
+
+/// Number of rows of a plane; an empty-width image has none.
+fn rows_of(len: usize, width: usize) -> usize {
+    len.checked_div(width).unwrap_or(0)
+}
+
+/// The rule itself, on `sample - base` values of the left, upper and
+/// upper-left neighbors.
+#[inline(always)]
+fn predict_delta(predictor: RowPredictor, left: i32, up: i32, up_left: i32) -> i32 {
+    match predictor {
+        RowPredictor::None => 0,
+        RowPredictor::Left => left,
+        RowPredictor::Up => up,
+        // Floor division by 2; `>>` is arithmetic on i32.
+        RowPredictor::Average => (left + up) >> 1,
+        RowPredictor::Paeth => {
+            let (pl, pu, pul) = (
+                (up - up_left).abs(),
+                (left - up_left).abs(),
+                (left + up - 2 * up_left).abs(),
+            );
+            // Written as selects rather than nested branches; same tie order
+            // as PNG: left, then up, then upper-left.
+            let up_or_up_left = if pu <= pul { up } else { up_left };
+            if pl <= pu && pl <= pul {
+                left
+            } else {
+                up_or_up_left
+            }
+        }
+        // Median of left, up and the gradient estimate.
+        RowPredictor::Med => (left + up - up_left).clamp(left.min(up), left.max(up)),
+    }
+}
+
 /// Prediction for sample `i` from already reconstructed samples. With a base
-/// (the decoded green plane), the predictor works on `sample - base`.
+/// (the decoded green plane), the predictor works on `sample - base`. Except
+/// for `None`, the first sample predicts 0, the rest of the first row uses
+/// the left neighbor and the first column uses the neighbor above.
 fn prediction(
-    predictor: Predictor,
+    predictor: RowPredictor,
     recon: &[u8],
     base: Option<&[u8]>,
     width: usize,
@@ -337,11 +408,14 @@ fn prediction(
 ) -> i32 {
     let b = |j: usize| base.map_or(0, |b| b[j] as i32);
     let d = |j: usize| recon[j] as i32 - b(j);
-    let delta = match predictor {
-        Predictor::None => 0,
-        Predictor::Up if i >= width => d(i - width),
-        Predictor::Up if !i.is_multiple_of(width) => d(i - 1),
-        Predictor::Up => 0,
+    let delta = if predictor == RowPredictor::None || i == 0 {
+        0
+    } else if i < width {
+        d(i - 1)
+    } else if i.is_multiple_of(width) {
+        d(i - width)
+    } else {
+        predict_delta(predictor, d(i - 1), d(i - width), d(i - width - 1))
     };
     (b(i) + delta).clamp(0, 255)
 }
@@ -380,6 +454,31 @@ fn native_stream(
     Ok(out)
 }
 
+/// Codes row `y` with `predictor`, writing reconstructions into `recon` and
+/// symbols into `symbols`. Returns the sum of the signed symbol magnitudes,
+/// the encoder's estimate of the row's cost.
+#[allow(clippy::too_many_arguments)]
+fn code_row(
+    samples: &[u8],
+    recon: &mut [u8],
+    symbols: &mut [u8],
+    base: Option<&[u8]>,
+    width: usize,
+    y: usize,
+    predictor: RowPredictor,
+    q: Quantizer,
+) -> u64 {
+    let mut cost = 0;
+    for i in y * width..(y + 1) * width {
+        let p = prediction(predictor, recon, base, width, i);
+        let s = q.symbol(samples[i], p);
+        recon[i] = q.reconstruct(p, s);
+        symbols[i] = s;
+        cost += q.signed(s).unsigned_abs() as u64;
+    }
+    cost
+}
+
 /// Writes one channel and returns its reconstruction, which is what the
 /// decoder will see and therefore what later channels must predict from.
 fn write_channel(
@@ -397,13 +496,28 @@ fn write_channel(
         }
     }
     out.push(CHANNEL_CODED);
+    let rows = rows_of(samples.len(), width);
     let mut recon = vec![0u8; samples.len()];
-    let mut symbols = Vec::with_capacity(samples.len());
-    for (i, &x) in samples.iter().enumerate() {
-        let p = prediction(predictor, &recon, base, width, i);
-        let s = q.symbol(x, p);
-        recon[i] = q.reconstruct(p, s);
-        symbols.push(s);
+    let mut symbols = vec![0u8; samples.len()];
+    let mut row_predictors = Vec::with_capacity(rows);
+    for y in 0..rows {
+        let chosen = match predictor {
+            Predictor::None => RowPredictor::None,
+            Predictor::Up => RowPredictor::Up,
+            // Encoding speed is not a priority: try every rule on the row and
+            // keep the one with the smallest residuals.
+            Predictor::PerRow => ROW_PREDICTORS
+                .into_iter()
+                .min_by_key(|&rp| {
+                    code_row(samples, &mut recon, &mut symbols, base, width, y, rp, q)
+                })
+                .expect("non-empty predictor list"),
+        };
+        code_row(samples, &mut recon, &mut symbols, base, width, y, chosen, q);
+        row_predictors.push(chosen as u8);
+    }
+    if predictor == Predictor::PerRow {
+        write_plane(out, &row_predictors)?;
     }
     write_plane(out, &symbols)?;
     Ok(recon)
@@ -421,18 +535,119 @@ fn read_channel(
     match take(data, at, 1)?[0] {
         CHANNEL_CONSTANT => Ok(vec![take(data, at, 1)?[0]; pixels]),
         CHANNEL_CODED => {
+            let rows = rows_of(pixels, width);
+            let row_predictors: Vec<RowPredictor> = match predictor {
+                Predictor::None => vec![RowPredictor::None; rows],
+                Predictor::Up => vec![RowPredictor::Up; rows],
+                Predictor::PerRow => read_plane(data, at, rows)?
+                    .into_iter()
+                    .map(RowPredictor::from_byte)
+                    .collect::<Result<_>>()?,
+            };
             // Symbols are replaced by samples in place; prediction only reads
             // positions that are already reconstructed.
             let mut plane = read_plane(data, at, pixels)?;
-            for i in 0..plane.len() {
-                let s = plane[i];
-                ensure!((s as i32) < q.range, "symbol outside quantizer range");
-                let p = prediction(predictor, &plane, base, width, i);
-                plane[i] = q.reconstruct(p, s);
+            for (y, &rp) in row_predictors.iter().enumerate() {
+                if q.near == 0 && reconstruct_row_lossless(&mut plane, base, width, y, rp) {
+                    continue;
+                }
+                for i in y * width..(y + 1) * width {
+                    let s = plane[i];
+                    ensure!((s as i32) < q.range, "symbol outside quantizer range");
+                    let p = prediction(rp, &plane, base, width, i);
+                    plane[i] = q.reconstruct(p, s);
+                }
             }
             Ok(plane)
         }
         kind => bail!("invalid channel kind {kind}"),
+    }
+}
+
+/// Lossless fast path of the decoder for every row below the first (and for
+/// `None` rows anywhere). With `max_error = 0` reconstruction is
+/// `sample = prediction + symbol (mod 256)`: `None` and `Up` rows are slice
+/// operations the compiler vectorizes, and the other rules use a tight
+/// sequential loop. Returns false for rows it does not handle. Must agree exactly with `prediction`; the roundtrip tests compare
+/// the two.
+fn reconstruct_row_lossless(
+    plane: &mut [u8],
+    base: Option<&[u8]>,
+    width: usize,
+    y: usize,
+    predictor: RowPredictor,
+) -> bool {
+    let row = y * width..(y + 1) * width;
+    match (predictor, base) {
+        (RowPredictor::None, None) => true,
+        (RowPredictor::None, Some(base)) => {
+            for (x, &b) in plane[row.clone()].iter_mut().zip(&base[row]) {
+                *x = x.wrapping_add(b);
+            }
+            true
+        }
+        (RowPredictor::Up, None) if y > 0 => {
+            let (done, rest) = plane.split_at_mut(y * width);
+            let above = &done[(y - 1) * width..];
+            for (x, &a) in rest[..width].iter_mut().zip(above) {
+                *x = x.wrapping_add(a);
+            }
+            true
+        }
+        (RowPredictor::Up, Some(base)) if y > 0 => {
+            let (done, rest) = plane.split_at_mut(y * width);
+            let above = &done[(y - 1) * width..];
+            let above_base = &base[(y - 1) * width..y * width];
+            for (((x, &a), &b), &ab) in rest[..width]
+                .iter_mut()
+                .zip(above)
+                .zip(&base[row])
+                .zip(above_base)
+            {
+                let p = (b as i16 + a as i16 - ab as i16).clamp(0, 255) as u8;
+                *x = x.wrapping_add(p);
+            }
+            true
+        }
+        (_, None) if y > 0 => {
+            reconstruct_row_sequential::<false>(plane, &[], width, y, predictor);
+            true
+        }
+        (_, Some(base)) if y > 0 => {
+            reconstruct_row_sequential::<true>(plane, base, width, y, predictor);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Lossless reconstruction of a row below the first for any rule, keeping the
+/// neighbors in locals instead of re-reading them through `prediction`.
+fn reconstruct_row_sequential<const HAS_BASE: bool>(
+    plane: &mut [u8],
+    base: &[u8],
+    width: usize,
+    y: usize,
+    predictor: RowPredictor,
+) {
+    let (done, rest) = plane.split_at_mut(y * width);
+    let above = &done[(y - 1) * width..];
+    let row = &mut rest[..width];
+    let base_at = |j: usize| if HAS_BASE { base[j] as i32 } else { 0 };
+    let (mut left, mut up_left) = (0, 0);
+    for x in 0..width {
+        let b = base_at(y * width + x);
+        let up = above[x] as i32 - base_at((y - 1) * width + x);
+        // First column: the neighbor above, as in `prediction`.
+        let delta = if x == 0 {
+            up
+        } else {
+            predict_delta(predictor, left, up, up_left)
+        };
+        let v = row[x].wrapping_add((b + delta).clamp(0, 255) as u8);
+        row[x] = v;
+        left = v as i32 - b;
+        up_left = up;
     }
 }
 
@@ -450,6 +665,7 @@ fn decode_native(width: u32, height: u32, plain: &[u8]) -> Result<(u32, u32, Vec
     let predictor = match header[1] {
         0 => Predictor::None,
         1 => Predictor::Up,
+        2 => Predictor::PerRow,
         p => bail!("invalid predictor {p}"),
     };
     let q = Quantizer::new(header[2]);
@@ -878,9 +1094,17 @@ mod tests {
     }
     #[test]
     fn rejects_malformed_native_streams() {
-        let cases: [(&str, Vec<u8>); 5] = [
+        // Per-row predictor stream whose single row names rule 9.
+        let mut bad_row = vec![0, 2, 0, CHANNEL_CODED];
+        bad_row.extend(1u32.to_le_bytes());
+        bad_row.extend(1u16.to_le_bytes());
+        bad_row.push(0);
+        bad_row.extend(1u32.to_le_bytes());
+        bad_row.push(9);
+        let cases: [(&str, Vec<u8>); 6] = [
+            ("invalid row predictor", bad_row),
             ("invalid transform", vec![3, 0, 0]),
-            ("invalid predictor", vec![0, 2, 0]),
+            ("invalid predictor", vec![0, 3, 0]),
             ("lossless only", vec![2, 0, 1, 0, 1, 2, 3, 4]),
             (
                 "palette index out of range",

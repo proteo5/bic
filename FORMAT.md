@@ -37,8 +37,9 @@ channel...                      1 channel (palette) or 4 channels
 Each channel starts with a kind byte:
 
 * `0` constant, followed by its value byte;
-* `1` coded, followed by a plane of `width × height` symbols (see *Blocks and
-  modes*).
+* `1` coded. With predictor `2` (per row), a plane of `height` row-rule bytes
+  comes first. Then comes a plane of `width × height` symbols. Both planes use
+  the format described in *Blocks and modes*.
 
 ### Prediction and quantization
 
@@ -47,11 +48,26 @@ prediction `P` from samples it has already reconstructed:
 
 * `base` is the decoded green sample at `i` for R and B under transform 1,
   and 0 otherwise;
-* `D(j) = sample(j) − base(j)`;
-* predictor `0` (none): `delta = 0`;
-* predictor `1` (up): `delta = D(i − width)`. On the first row it is
-  `D(i − 1)`, and for the first sample it is 0;
+* `D(j) = sample(j) − base(j)`, and `L`, `U`, `UL` are `D` of the left,
+  upper and upper-left neighbors;
 * `P = clamp(base(i) + delta, 0, 255)`.
+
+The header's predictor byte selects the row rule: `0` uses rule *none* on
+every row, `1` uses rule *up* on every row, and `2` reads one rule byte per
+row. Row rules:
+
+| Rule | `delta` |
+| --- | --- |
+| `0` none | `0` |
+| `1` left | `L` |
+| `2` up | `U` |
+| `3` average | `floor((L + U) / 2)` |
+| `4` Paeth | of `L`, `U`, `UL`, the one closest to `L + U − UL`; ties prefer `L`, then `U` |
+| `5` MED | `clamp(L + U − UL, min(L, U), max(L, U))` |
+
+For every rule except *none*, edges are handled the same way. The first
+sample uses `delta = 0`. The rest of the first row uses `L`, and the first
+column uses `U`. Rule bytes above 5 are invalid.
 
 Residuals are quantized as in near-lossless JPEG-LS. With `n = max_error`,
 `step = 2n + 1` and `range = (255 + 2n) / step + 1`, the encoder computes
@@ -73,11 +89,11 @@ Every decoded sample is within `max_error` of the original. With
 
 ### Encoder choices (non-normative)
 
-The encoder tries two candidates in parallel and keeps the smaller file:
-palette with no predictor or with up when the image has at most 256 colors
-and is lossless, and otherwise direct with no predictor or subtract green
-with up. These pairs were chosen from benchmark measurements; any valid
-combination decodes.
+The reference encoder builds every valid combination of transform and
+predictor in parallel and keeps the smallest file. For per-row prediction it
+codes each row with every rule and keeps the one with the smallest sum of
+quantized residual magnitudes. Encoding speed is deliberately traded for file
+size. Any valid combination decodes.
 
 ## Blocks and modes
 
@@ -95,7 +111,7 @@ Runs longer than the counter's capacity are split.
 ## Deliberate prototype limits
 
 Only 8-bit RGBA input and output are supported. There is no animation, color
-profile, or progressive decoding, and only two predictors are defined.
+profile, or progressive decoding.
 
 ## Decoder limits
 

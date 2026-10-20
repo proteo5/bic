@@ -33,8 +33,11 @@ as a library and a command-line tool with a small native viewer.
 - **Near-lossless mode**: `--max-error N` guarantees every decoded sample is
   within `N` of the original (JPEG-LS-style quantization).
 - **Per-image choice of encoding**: a palette for images with up to 256
-  colors, or a subtract-green color transform with prediction from the row
-  above. The encoder tries the two options that fit and keeps the smaller.
+  colors, an optional subtract-green color transform, and prediction that is
+  either fixed (none or up) or chosen per row (none, left, up, average, Paeth,
+  MED). The encoder tries every valid combination and keeps the smallest.
+- **Size first, fast decoding second**: encoding is deliberately exhaustive
+  and slow. Lossless decoding uses vectorizable row loops.
 - **Planar coding**: channels are coded separately; constant channels cost two
   bytes.
 - **Adaptive block coding**: each plane is split into blocks of 256, 1024 or
@@ -84,7 +87,7 @@ The binary is written to `target/release/bic` (`bic.exe` on Windows).
 | --- | --- | --- |
 | `--max-error <N>` | `0` | Largest allowed difference per sample. `0` is lossless. |
 | `--png-fallback` | off | Store a PNG instead when it is smaller (lossless encodes only). |
-| `--zstd-level <N>` | `9` | Zstandard compression level. |
+| `--zstd-level <N>` | `19` | Zstandard compression level (1–22). Higher levels shrink files; decoding speed barely changes. |
 
 ### Examples
 
@@ -151,15 +154,14 @@ RGBA image
   ├─ ≤ 256 colors (lossless)  →  palette + one index plane
   └─ otherwise                →  G, R, B, A planes (R and B relative to G)
        └─ per plane: constant → 2 bytes, or
-            ├─ prediction (none, or the row above)
+            ├─ prediction (none, up, or a rule per row)
             ├─ residual quantization (exact when max_error = 0)
             └─ adaptive blocks: RAW | RLE-4 | RLE-8 | RLE-12 | RLE-16
   └─ Zstandard
   └─ BIC2 container (32-byte header)
 ```
 
-The encoder builds the two candidate encodings in parallel and keeps the
-smaller one.
+The encoder builds every candidate encoding in parallel and keeps the smallest.
 
 The full wire format is specified in [FORMAT.md](FORMAT.md).
 
@@ -194,18 +196,21 @@ then prints a per-image table and a summary against PNG (image-rs), oxipng,
 WebP lossless and QOI, using both total-size and geometric-mean ratios. If any
 image fails, the command exits with an error.
 
-Results are recorded in [BENCHMARKS.md](BENCHMARKS.md). With BIC2, files are
-on average about 20 % smaller than oxipng on the synthetic flat-graphics corpus
-and about 11 % smaller on a set of photographs. Encoding is slower than PNG
-encoders tuned for speed. CI reruns the synthetic benchmark on every push.
+Results are recorded in [BENCHMARKS.md](BENCHMARKS.md). With BIC2 at the
+default settings, files are on average (geometric mean) about 24 % smaller than
+oxipng on the synthetic flat-graphics corpus and about 16 % smaller on a set of
+photographs. CI reruns the synthetic benchmark on every push.
 
 ## Limitations
 
 - 8-bit RGBA only. 16-bit images are reduced to 8 bits on load.
-- Only two predictors (none and up) and one color transform.
+- One color transform (subtract green).
 - ICC color profiles and EXIF orientation are not preserved.
 - No animation or progressive decoding.
-- Decoding is about twice as slow as BIC1 because of per-sample prediction.
+- Encoding is slow by design (about a minute for a 20-megapixel photo).
+- Rows that use the left, average, Paeth or MED rules decode sequentially,
+  about half the speed of `none` and `up` rows.
+- Near-lossless decoding uses a per-sample loop and is slower than lossless.
 - The format version may change without a migration path.
 
 ## Roadmap
@@ -214,8 +219,8 @@ encoders tuned for speed. CI reruns the synthetic benchmark on every push.
 - [x] Palette mode for images with up to 256 colors
 - [x] Near-lossless mode with a guaranteed per-sample error bound
 - [x] Keep or drop the RLE stage: measured, kept (plain Zstandard was larger)
-- [ ] Faster decoding (specialized prediction loops)
-- [ ] More predictors (left, Paeth, per-row choice), kept only if BENCHMARKS.md improves
+- [x] Faster lossless decoding (vectorizable row loops)
+- [x] Per-row predictor choice (left, average, Paeth, MED)
 - [x] Image corpus and regression benchmarks against PNG, oxipng, WebP lossless and QOI
 - [x] Decoder fuzzing (`cargo-fuzz`) and property-based roundtrip tests
 - [ ] Viewer without a console window, with frame-rate limiting

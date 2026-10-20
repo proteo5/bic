@@ -22,41 +22,52 @@ is BIC's total size over the baseline's total, and **BIC/geomean** is the
 geometric mean of per-image ratios, so a single large image cannot dominate
 it. Below 1.000 means BIC is smaller.
 
-## Current — BIC2, Zstd level 9
+## Current — BIC2, Zstd level 19, all candidates, per-row predictors
 
 ### Synthetic corpus (`gen_corpus`)
 
 | Image | Size | PNG | oxipng | WebP | QOI | BIC2 | BIC2/oxipng | BIC1/oxipng |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| chart | 800×600 | 11.4 | 1.3 | 0.8 | 14.8 | 0.4 | 0.328 | 1.882 |
-| control_gradient | 512×512 | 222.8 | 20.6 | 131.3 | 209.9 | 17.5 | 0.850 | 0.850 |
+| chart | 800×600 | 11.4 | 1.3 | 0.8 | 14.8 | 0.4 | 0.321 | 1.882 |
+| control_gradient | 512×512 | 222.8 | 20.6 | 131.3 | 209.9 | 15.3 | 0.741 | 0.850 |
 | control_noise | 256×256 | 256.3 | 192.3 | 192.1 | 255.9 | 192.4 | 1.000 | 1.000 |
-| diagram | 1024×768 | 57.2 | 6.0 | 15.2 | 32.9 | 4.9 | 0.813 | 1.107 |
-| icon_alpha | 256×256 | 6.1 | 1.7 | 3.3 | 4.0 | 1.6 | 0.984 | 1.125 |
-| pixel_art | 320×240 | 8.0 | 1.3 | 3.1 | 16.6 | 1.2 | 0.903 | 2.448 |
-| ui_mock | 1280×800 | 194.9 | 17.5 | 53.9 | 85.1 | 17.8 | 1.018 | 1.398 |
+| diagram | 1024×768 | 57.2 | 6.0 | 15.2 | 32.9 | 4.6 | 0.762 | 1.107 |
+| icon_alpha | 256×256 | 6.1 | 1.7 | 3.3 | 4.0 | 1.5 | 0.926 | 1.125 |
+| pixel_art | 320×240 | 8.0 | 1.3 | 3.1 | 16.6 | 1.1 | 0.875 | 2.448 |
+| ui_mock | 1280×800 | 194.9 | 17.5 | 53.9 | 85.1 | 16.7 | 0.952 | 1.398 |
 
 | Baseline | Total KiB | BIC2/total | BIC2/geomean | BIC2 smaller |
 | --- | ---: | ---: | ---: | ---: |
-| PNG (image-rs) | 756.7 | 0.312 | 0.131 | 7/7 |
-| oxipng preset 2 | 240.7 | 0.980 | 0.798 | 5/7 |
-| WebP lossless (image-rs) | 399.7 | 0.590 | 0.392 | 6/7 |
-| QOI | 619.2 | 0.381 | 0.149 | 7/7 |
+| PNG (image-rs) | 756.7 | 0.307 | 0.124 | 7/7 |
+| oxipng preset 2 | 240.7 | 0.964 | 0.755 | 6/7 |
+| WebP lossless (image-rs) | 399.7 | 0.580 | 0.371 | 6/7 |
+| QOI | 619.2 | 0.375 | 0.141 | 7/7 |
 
 ### Private photo set
 
 | Baseline | BIC2/total | BIC2/geomean | BIC2 smaller | BIC1/geomean |
 | --- | ---: | ---: | ---: | ---: |
-| PNG (image-rs) | 0.617 | 0.531 | 14/14 | 1.108 |
-| oxipng preset 2 | 0.887 | 0.886 | 10/14 | 1.849 |
-| WebP lossless (image-rs) | 0.867 | 0.916 | 10/14 | 1.912 |
-| QOI | 0.617 | 0.555 | 14/14 | 1.158 |
+| PNG (image-rs) | 0.574 | 0.501 | 14/14 | 1.108 |
+| oxipng preset 2 | 0.825 | 0.837 | 11/14 | 1.849 |
+| WebP lossless (image-rs) | 0.807 | 0.865 | 11/14 | 1.912 |
+| QOI | 0.574 | 0.524 | 14/14 | 1.158 |
 
-### Speed
+### How each step contributed (geometric mean vs oxipng)
 
-On the 5482×3647 photograph (release build, two candidates encoded in
-parallel), BIC2 encodes in about 4.9 s (BIC1: 4.3 s) and decodes in about
-0.45 s (BIC1: 0.22 s). Decoding is slower because every sample is predicted.
+| Step | Synthetic | Photos | Decode, 5482×3647 photo |
+| --- | ---: | ---: | ---: |
+| BIC1 | 1.316 | 1.849 | 215 ms |
+| BIC2: 2 candidates, Zstd 9 | 0.798 | 0.886 | 445 ms |
+| + vectorized lossless decoding | — | — | 181 ms |
+| + Zstd level 19 | 0.755 | 0.848 | ≈ same |
+| + every transform/predictor candidate | 0.755 | 0.848 | — |
+| + per-row predictors | 0.755 | **0.837** | 375 ms |
+
+Priorities are file size first and decoding speed second; encoding time is
+not a goal. Per-row predictors cost decoding speed on photographs because
+left, average, Paeth and MED rows depend on the sample just decoded. On the
+flat-graphics corpus every image decodes in under 2 ms. Encoding the
+20-megapixel photo takes about a minute.
 
 ### How BIC2 was chosen
 
