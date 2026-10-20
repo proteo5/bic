@@ -71,7 +71,7 @@ The binary is written to `target/release/bic` (`bic.exe` on Windows).
 | `bic decode <input.bic> <output>` | Decode to any format inferred from the output extension |
 | `bic view <file>` | Open a `.bic` or any supported image in the viewer (Esc closes it) |
 | `bic verify <original> <file.bic>` | Check that the BIC decodes to exactly the original pixels |
-| `bic compare <input>` | Report BIC vs PNG size and encode/decode time |
+| `bic compare <paths>... [--csv out.csv]` | Benchmark lossless BIC against PNG, oxipng, WebP and QOI on files or folders |
 | `bic install-association` | Associate `.bic` with the viewer for the current Windows user |
 
 ### Encode options
@@ -177,14 +177,21 @@ as a security boundary.
 ## Benchmarking
 
 ```bash
-bic compare input.png --zstd-level 19
+# Deterministic synthetic corpus of flat graphics plus two controls
+cargo run --release --example gen_corpus -- target/corpus
+
+# Benchmark any mix of files and folders
+bic compare target/corpus ~/Pictures/screenshots --csv results.csv
 ```
 
-`compare` encodes the image losslessly, verifies the roundtrip, and prints the
-BIC size, the size of a PNG from the `image` crate's default encoder, their
-ratio, and the encode/decode times. Results depend on the image and on the PNG
-encoder used for the baseline. BIC is aimed at flat graphics and is generally
-not competitive on photographs. No general superiority over PNG is claimed.
+`compare` encodes each image losslessly and verifies the exact roundtrip. It
+then prints a per-image table and a summary against PNG (image-rs), oxipng,
+WebP lossless and QOI, using both total-size and geometric-mean ratios. If any
+image fails, the command exits with an error.
+
+The current baseline is in [BENCHMARKS.md](BENCHMARKS.md). In short, BIC beats
+PNG and QOI on flat graphics, is close to oxipng by total size, and is not
+competitive on photographs yet. CI reruns the synthetic benchmark on every push.
 
 ## Limitations
 
@@ -200,7 +207,7 @@ not competitive on photographs. No general superiority over PNG is claimed.
 - [ ] Reversible color decorrelation (e.g. YCoCg-R)
 - [ ] Evaluate the RLE stage against plain Zstandard on predicted planes
 - [ ] Zigzag-coded `u8` residuals; store quantization indices
-- [ ] Image corpus and regression benchmarks against PNG, oxipng, WebP lossless and QOI
+- [x] Image corpus and regression benchmarks against PNG, oxipng, WebP lossless and QOI
 - [ ] Decoder fuzzing (`cargo-fuzz`) and property-based roundtrip tests
 - [ ] Viewer without a console window, with frame-rate limiting
 - [ ] EXIF orientation and ICC profile handling

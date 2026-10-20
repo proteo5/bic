@@ -2,6 +2,7 @@
 name = "bic"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 description = "Experimental planar RGBA image codec prototype"
 license = "Apache-2.0"
 repository = "https://github.com/proteo5/bic"
@@ -12,10 +13,11 @@ categories = ["multimedia::images", "compression", "command-line-utilities"]
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff", "qoi"] }
 heic-rs = "0.1.4"
 minifb = "0.28"
 zstd = "0.13"
+oxipng = { version = "10.2.1", default-features = false, features = ["parallel"] }
 
 [dev-dependencies]
 tempfile = "3.13"

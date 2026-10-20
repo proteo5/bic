@@ -211,7 +211,10 @@ fn decode_native(width: u32, height: u32, plain: &[u8]) -> Result<(u32, u32, Vec
     let mut at = 0;
     let mut rgba = vec![0u8; pixels * 4];
     let fill = |rgba: &mut [u8], c: usize, v: u8| {
-        rgba.as_chunks_mut::<4>().0.iter_mut().for_each(|px| px[c] = v);
+        rgba.as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .for_each(|px| px[c] = v);
     };
     for c in 0..4 {
         let kind = take(plain, &mut at, 1)?[0];

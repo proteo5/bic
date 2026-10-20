@@ -1,3 +1,5 @@
+mod bench;
+
 use anyhow::{ensure, Context, Result};
 use bic::{decode_rgba, encode_rgba, is_png_fallback, EncodeOptions};
 use clap::{Parser, Subcommand};
@@ -7,7 +9,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
-    time::Instant,
 };
 
 #[derive(Parser)]
@@ -44,15 +45,20 @@ enum Command {
         input: PathBuf,
         bic: PathBuf,
     },
+    /// Compare lossless BIC with PNG, oxipng, WebP and QOI on images or folders
     Compare {
-        input: PathBuf,
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
         #[arg(long, default_value_t = 9)]
         zstd_level: i32,
+        /// Also write per-image results to this CSV file
+        #[arg(long)]
+        csv: Option<PathBuf>,
     },
     InstallAssociation,
 }
 
-fn load(path: &Path) -> Result<image::RgbaImage> {
+pub(crate) fn load(path: &Path) -> Result<image::RgbaImage> {
     let data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let ext = path
         .extension()
@@ -189,28 +195,11 @@ fn main() -> Result<()> {
             );
             println!("exact pixel roundtrip verified");
         }
-        Command::Compare { input, zstd_level } => {
-            let i = load(&input)?;
-            let mut png = std::io::Cursor::new(Vec::new());
-            i.write_to(&mut png, image::ImageFormat::Png)?;
-            let png = png.into_inner();
-            let t = Instant::now();
-            let bic = encode_rgba(
-                i.width(),
-                i.height(),
-                i.as_raw(),
-                EncodeOptions {
-                    zstd_level,
-                    ..Default::default()
-                },
-            )?;
-            let encode = t.elapsed();
-            let t = Instant::now();
-            let decoded = decode_rgba(&bic)?;
-            let decode = t.elapsed();
-            ensure!(decoded.2 == *i.as_raw(), "internal roundtrip failed");
-            println!("equivalent PNG: {} bytes\nBIC lossless: {} bytes\nBIC/PNG ratio: {:.3}\nencode: {:?}\ndecode: {:?}\nThis is a measurement for this image, not a general superiority claim.", png.len(), bic.len(), bic.len() as f64 / png.len() as f64, encode, decode);
-        }
+        Command::Compare {
+            inputs,
+            zstd_level,
+            csv,
+        } => bench::run(&inputs, zstd_level, csv.as_deref())?,
         Command::InstallAssociation => install_association()?,
     };
     Ok(())
