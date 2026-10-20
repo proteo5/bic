@@ -1,7 +1,7 @@
 # Benchmarks
 
-Baseline measurements for lossless BIC, recorded so that codec changes can be
-judged against them. Every run also verifies that each BIC file decodes to the
+Measurements for lossless BIC, recorded so that codec changes can be judged
+against them. Every run also verifies that each BIC file decodes to the
 exact original pixels.
 
 ## Reproducing
@@ -22,7 +22,64 @@ is BIC's total size over the baseline's total, and **BIC/geomean** is the
 geometric mean of per-image ratios, so a single large image cannot dominate
 it. Below 1.000 means BIC is smaller.
 
-## Baseline — v0.1.0, BIC1 format, Zstd level 9
+## Current — BIC2, Zstd level 9
+
+### Synthetic corpus (`gen_corpus`)
+
+| Image | Size | PNG | oxipng | WebP | QOI | BIC2 | BIC2/oxipng | BIC1/oxipng |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| chart | 800×600 | 11.4 | 1.3 | 0.8 | 14.8 | 0.4 | 0.328 | 1.882 |
+| control_gradient | 512×512 | 222.8 | 20.6 | 131.3 | 209.9 | 17.5 | 0.850 | 0.850 |
+| control_noise | 256×256 | 256.3 | 192.3 | 192.1 | 255.9 | 192.4 | 1.000 | 1.000 |
+| diagram | 1024×768 | 57.2 | 6.0 | 15.2 | 32.9 | 4.9 | 0.813 | 1.107 |
+| icon_alpha | 256×256 | 6.1 | 1.7 | 3.3 | 4.0 | 1.6 | 0.984 | 1.125 |
+| pixel_art | 320×240 | 8.0 | 1.3 | 3.1 | 16.6 | 1.2 | 0.903 | 2.448 |
+| ui_mock | 1280×800 | 194.9 | 17.5 | 53.9 | 85.1 | 17.8 | 1.018 | 1.398 |
+
+| Baseline | Total KiB | BIC2/total | BIC2/geomean | BIC2 smaller |
+| --- | ---: | ---: | ---: | ---: |
+| PNG (image-rs) | 756.7 | 0.312 | 0.131 | 7/7 |
+| oxipng preset 2 | 240.7 | 0.980 | 0.798 | 5/7 |
+| WebP lossless (image-rs) | 399.7 | 0.590 | 0.392 | 6/7 |
+| QOI | 619.2 | 0.381 | 0.149 | 7/7 |
+
+### Private photo set
+
+| Baseline | BIC2/total | BIC2/geomean | BIC2 smaller | BIC1/geomean |
+| --- | ---: | ---: | ---: | ---: |
+| PNG (image-rs) | 0.617 | 0.531 | 14/14 | 1.108 |
+| oxipng preset 2 | 0.887 | 0.886 | 10/14 | 1.849 |
+| WebP lossless (image-rs) | 0.867 | 0.916 | 10/14 | 1.912 |
+| QOI | 0.617 | 0.555 | 14/14 | 1.158 |
+
+### Speed
+
+On the 5482×3647 photograph (release build, two candidates encoded in
+parallel), BIC2 encodes in about 4.9 s (BIC1: 4.3 s) and decodes in about
+0.45 s (BIC1: 0.22 s). Decoding is slower because every sample is predicted.
+
+### How BIC2 was chosen
+
+A separate experiment encoded both corpora with every combination of:
+
+- color transform: none, subtract green, YCoCg-R (modulo 256), palette;
+- predictor: none, left, up, average, Paeth, MED, best-per-row;
+- residual mapping: raw byte or zigzag;
+- entropy stage: block RLE + Zstandard, or Zstandard alone.
+
+Findings:
+
+- The RLE stage stays. Zstandard alone was larger for every combination.
+- Zigzag mapping made no measurable difference.
+- YCoCg-R, Paeth, MED and averaging never won on enough images to matter.
+- No single combination won everywhere. Picking the best of
+  {palette/none, palette/up, none/none, subtract-green/up} per image
+  reached 0.802 (synthetic) and 0.884 (photos) geometric mean against
+  oxipng. The best of all 28 combinations reached 0.802 and 0.872. BIC2
+  implements those four candidates, two at a time depending on whether the
+  image fits a palette.
+
+## Baseline — v0.1.0, BIC1 format, Zstd level 9 (historical)
 
 ### Synthetic corpus (`gen_corpus`)
 
@@ -66,5 +123,4 @@ diagrams and a logo with transparency. The images are not published.
 - On photographs BIC is the largest format measured. That is expected
   without spatial prediction: RLE and Zstandard find almost no exact repeats
   in camera noise.
-- These numbers are the reference for phase 2 (predictors and color
-  decorrelation). A change is kept only if it improves them.
+- These numbers were the reference for BIC2 (above).

@@ -1,13 +1,19 @@
 use anyhow::{bail, ensure, Context, Result};
+use std::collections::HashMap;
 
-const MAGIC: &[u8; 4] = b"BIC1";
-const VERSION: u8 = 1;
+const MAGIC: &[u8; 4] = b"BIC2";
+const VERSION: u8 = 2;
 const STORAGE_NATIVE: u8 = 0;
 const STORAGE_PNG: u8 = 1;
 const MAX_PIXELS: usize = 100_000_000;
+const MAX_PALETTE: usize = 256;
 const BLOCK_SIZES: [usize; 3] = [256, 1024, 4096];
 const BLOCK_HEADER: usize = 7;
 const RLE_BITS: [u8; 4] = [4, 8, 12, 16];
+/// Green is coded first so that red and blue can be predicted from it.
+const CHANNEL_ORDER: [usize; 4] = [1, 0, 2, 3];
+const CHANNEL_CONSTANT: u8 = 0;
+const CHANNEL_CODED: u8 = 1;
 
 /// Resource caps applied before the decoder allocates anything.
 #[derive(Clone, Copy, Debug)]
@@ -29,9 +35,10 @@ impl Default for DecodeLimits {
 
 #[derive(Clone, Copy, Debug)]
 pub struct EncodeOptions {
-    pub quant_step: u8,
-    pub smooth_tolerance: u8,
-    pub residual: bool,
+    /// Largest allowed difference between an original and a decoded sample.
+    /// 0 is lossless.
+    pub max_error: u8,
+    /// Store a PNG instead when it is smaller (lossless encodes only).
     pub png_fallback: bool,
     pub zstd_level: i32,
 }
@@ -39,12 +46,81 @@ pub struct EncodeOptions {
 impl Default for EncodeOptions {
     fn default() -> Self {
         Self {
-            quant_step: 1,
-            smooth_tolerance: 0,
-            residual: false,
+            max_error: 0,
             png_fallback: false,
             zstd_level: 9,
         }
+    }
+}
+
+/// How channels relate before prediction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Transform {
+    Direct = 0,
+    /// Red and blue are predicted relative to the decoded green.
+    SubtractGreen = 1,
+    /// A single plane of indices into a color table.
+    Palette = 2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Predictor {
+    None = 0,
+    /// Sample above; the first row uses the sample to the left.
+    Up = 1,
+}
+
+struct Palette {
+    colors: Vec<[u8; 4]>,
+    indices: Vec<u8>,
+}
+
+/// Near-lossless quantizer in the style of JPEG-LS. Prediction residuals are
+/// quantized with step `2 * near + 1` and reduced modulo `range`, so every
+/// symbol fits in a byte and every decoded sample is within `near` of the
+/// original. With `near = 0` it is plain modulo-256 residual coding.
+#[derive(Clone, Copy, Debug)]
+struct Quantizer {
+    near: i32,
+    step: i32,
+    range: i32,
+}
+
+impl Quantizer {
+    fn new(max_error: u8) -> Self {
+        let near = max_error as i32;
+        let step = 2 * near + 1;
+        Self {
+            near,
+            step,
+            range: (255 + 2 * near) / step + 1,
+        }
+    }
+
+    fn symbol(&self, x: u8, prediction: i32) -> u8 {
+        let e = x as i32 - prediction;
+        let q = if e >= 0 {
+            (e + self.near) / self.step
+        } else {
+            -((self.near - e) / self.step)
+        };
+        q.rem_euclid(self.range) as u8
+    }
+
+    fn reconstruct(&self, prediction: i32, symbol: u8) -> u8 {
+        let s = symbol as i32;
+        let q = if s >= (self.range + 1) / 2 {
+            s - self.range
+        } else {
+            s
+        };
+        let mut r = prediction + q * self.step;
+        if r < -self.near {
+            r += self.range * self.step;
+        } else if r > 255 + self.near {
+            r -= self.range * self.step;
+        }
+        r.clamp(0, 255) as u8
     }
 }
 
@@ -59,21 +135,48 @@ pub fn encode_rgba(
         rgba.len() == pixels * 4,
         "RGBA byte count does not match dimensions"
     );
-    ensure!(
-        options.quant_step > 0,
-        "quantization step must be at least 1"
-    );
-    let native = native_stream(width, height, rgba, options)?;
-    let packed = zstd::stream::encode_all(native.as_slice(), options.zstd_level)?;
-    let native_file = container(width, height, STORAGE_NATIVE, native.len() as u64, &packed);
+    let (palette, candidates) = candidates(rgba, options.max_error);
+    let encode = |(transform, predictor)| -> Result<Vec<u8>> {
+        let plain = native_stream(
+            width as usize,
+            rgba,
+            palette.as_ref(),
+            transform,
+            predictor,
+            options.max_error,
+        )?;
+        let packed = zstd::bulk::compress(&plain, options.zstd_level)?;
+        Ok(container(
+            width,
+            height,
+            STORAGE_NATIVE,
+            plain.len() as u64,
+            &packed,
+        ))
+    };
+    // Candidates are independent, so they are encoded in parallel.
+    let files: Vec<Result<Vec<u8>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = candidates
+            .into_iter()
+            .map(|c| scope.spawn(move || encode(c)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("encoder thread panicked"))
+            .collect()
+    });
+    let mut native: Option<Vec<u8>> = None;
+    for file in files {
+        let file = file?;
+        if native.as_ref().is_none_or(|b| file.len() < b.len()) {
+            native = Some(file);
+        }
+    }
+    let native = native.context("no encoding candidate")?;
     // PNG cannot represent an empty image, so those always stay native.
-    if options.png_fallback
-        && pixels > 0
-        && options.quant_step == 1
-        && options.smooth_tolerance == 0
-    {
+    if options.png_fallback && options.max_error == 0 && pixels > 0 {
         let png = png_bytes(width, height, rgba)?;
-        if png.len() <= native_file.len() {
+        if png.len() <= native.len() {
             return Ok(container(
                 width,
                 height,
@@ -83,7 +186,53 @@ pub fn encode_rgba(
             ));
         }
     }
-    Ok(native_file)
+    Ok(native)
+}
+
+/// The encodings worth trying for this image. Measured on the benchmark
+/// corpora, these two per case capture almost all of the gain of trying every
+/// transform and predictor combination (see BENCHMARKS.md).
+fn candidates(rgba: &[u8], max_error: u8) -> (Option<Palette>, Vec<(Transform, Predictor)>) {
+    let palette = (max_error == 0).then(|| build_palette(rgba)).flatten();
+    let list = if palette.is_some() {
+        vec![
+            (Transform::Palette, Predictor::None),
+            (Transform::Palette, Predictor::Up),
+        ]
+    } else {
+        vec![
+            (Transform::Direct, Predictor::None),
+            (Transform::SubtractGreen, Predictor::Up),
+        ]
+    };
+    (palette, list)
+}
+
+/// Indexes images with at most 256 distinct colors, most frequent first.
+fn build_palette(rgba: &[u8]) -> Option<Palette> {
+    let pixels = rgba.as_chunks::<4>().0;
+    let mut counts: HashMap<[u8; 4], usize> = HashMap::new();
+    for px in pixels {
+        *counts.entry(*px).or_default() += 1;
+        if counts.len() > MAX_PALETTE {
+            return None;
+        }
+    }
+    if counts.is_empty() {
+        return None;
+    }
+    let mut colors: Vec<([u8; 4], usize)> = counts.into_iter().collect();
+    // Ties are broken by value so the output is deterministic.
+    colors.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let lookup: HashMap<[u8; 4], u8> = colors
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.0, i as u8))
+        .collect();
+    Some(Palette {
+        indices: pixels.iter().map(|px| lookup[px]).collect(),
+        colors: colors.into_iter().map(|c| c.0).collect(),
+    })
 }
 
 pub fn decode_rgba(file: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
@@ -116,11 +265,11 @@ pub fn decode_rgba_with_limits(file: &[u8], limits: DecodeLimits) -> Result<(u32
         storage == STORAGE_NATIVE,
         "unsupported storage type {storage}"
     );
-    // Peak working set of decode_native: RGBA output plus one plane and its
-    // two residual planes, on top of the decompressed stream itself.
+    // Peak working set of decode_native: RGBA output, the decoded green plane
+    // and the plane being decoded, on top of the decompressed stream itself.
     let plain_len = usize::try_from(plain_len).context("plain length overflow")?;
     let needed = pixels
-        .checked_mul(7)
+        .checked_mul(6)
         .and_then(|n| n.checked_add(plain_len))
         .context("decode size overflow")?;
     ensure!(
@@ -161,7 +310,7 @@ fn container(width: u32, height: u32, storage: u8, plain_len: u64, payload: &[u8
 }
 
 fn parse_container(file: &[u8], max_pixels: usize) -> Result<(u32, u32, u8, u64, &[u8])> {
-    ensure!(file.len() >= 32 && &file[..4] == MAGIC, "not a BIC1 file");
+    ensure!(file.len() >= 32 && &file[..4] == MAGIC, "not a BIC2 file");
     ensure!(file[4] == VERSION, "unsupported BIC version");
     let storage = file[5];
     ensure!(file[6..8] == [0, 0], "unsupported BIC flags");
@@ -177,109 +326,164 @@ fn parse_container(file: &[u8], max_pixels: usize) -> Result<(u32, u32, u8, u64,
     Ok((width, height, storage, plain_len, &file[32..]))
 }
 
-fn native_stream(width: u32, height: u32, rgba: &[u8], opt: EncodeOptions) -> Result<Vec<u8>> {
-    let pixels = checked_pixels(width, height, MAX_PIXELS)?;
-    let mut out = Vec::new();
-    for c in 0..4 {
-        let plane: Vec<u8> = (0..pixels).map(|p| rgba[p * 4 + c]).collect();
-        if plane.iter().all(|&v| v == if c == 3 { 255 } else { 0 }) {
-            out.push(0);
-            continue;
-        }
-        if plane.iter().all(|&v| v == plane[0]) {
-            out.extend([1, plane[0]]);
-            continue;
-        }
-        let min = *plane.iter().min().unwrap();
-        let max = *plane.iter().max().unwrap();
-        let normalized: Vec<u8> = plane.iter().map(|v| v - min).collect();
-        let transformed = transform(&normalized, opt.quant_step, opt.smooth_tolerance);
-        let residual: Vec<i16> = normalized
-            .iter()
-            .zip(&transformed)
-            .map(|(&a, &b)| a as i16 - b as i16)
-            .collect();
-        let has_residual = opt.residual && (opt.quant_step > 1 || opt.smooth_tolerance > 0);
-        out.extend([2, min, max, opt.quant_step, has_residual as u8]);
-        write_plane(&mut out, &transformed)?;
-        if has_residual {
-            let lo: Vec<u8> = residual.iter().map(|v| *v as u16 as u8).collect();
-            let hi: Vec<u8> = residual.iter().map(|v| (*v as u16 >> 8) as u8).collect();
-            write_plane(&mut out, &lo)?;
-            write_plane(&mut out, &hi)?;
+/// Prediction for sample `i` from already reconstructed samples. With a base
+/// (the decoded green plane), the predictor works on `sample - base`.
+fn prediction(
+    predictor: Predictor,
+    recon: &[u8],
+    base: Option<&[u8]>,
+    width: usize,
+    i: usize,
+) -> i32 {
+    let b = |j: usize| base.map_or(0, |b| b[j] as i32);
+    let d = |j: usize| recon[j] as i32 - b(j);
+    let delta = match predictor {
+        Predictor::None => 0,
+        Predictor::Up if i >= width => d(i - width),
+        Predictor::Up if !i.is_multiple_of(width) => d(i - 1),
+        Predictor::Up => 0,
+    };
+    (b(i) + delta).clamp(0, 255)
+}
+
+fn native_stream(
+    width: usize,
+    rgba: &[u8],
+    palette: Option<&Palette>,
+    transform: Transform,
+    predictor: Predictor,
+    max_error: u8,
+) -> Result<Vec<u8>> {
+    let q = Quantizer::new(max_error);
+    let mut out = vec![transform as u8, predictor as u8, max_error];
+    if transform == Transform::Palette {
+        let palette = palette.context("palette transform without a palette")?;
+        ensure!(max_error == 0, "palette encoding is lossless only");
+        out.push((palette.colors.len() - 1) as u8);
+        out.extend(palette.colors.iter().flatten());
+        write_channel(&mut out, &palette.indices, None, width, predictor, q)?;
+        return Ok(out);
+    }
+    let mut green = None;
+    for c in CHANNEL_ORDER {
+        let samples: Vec<u8> = rgba.iter().skip(c).step_by(4).copied().collect();
+        let base = if transform == Transform::SubtractGreen && (c == 0 || c == 2) {
+            green.as_deref()
+        } else {
+            None
+        };
+        let recon = write_channel(&mut out, &samples, base, width, predictor, q)?;
+        if c == 1 {
+            green = Some(recon);
         }
     }
     Ok(out)
 }
 
+/// Writes one channel and returns its reconstruction, which is what the
+/// decoder will see and therefore what later channels must predict from.
+fn write_channel(
+    out: &mut Vec<u8>,
+    samples: &[u8],
+    base: Option<&[u8]>,
+    width: usize,
+    predictor: Predictor,
+    q: Quantizer,
+) -> Result<Vec<u8>> {
+    if let [first, rest @ ..] = samples {
+        if rest.iter().all(|v| v == first) {
+            out.extend([CHANNEL_CONSTANT, *first]);
+            return Ok(samples.to_vec());
+        }
+    }
+    out.push(CHANNEL_CODED);
+    let mut recon = vec![0u8; samples.len()];
+    let mut symbols = Vec::with_capacity(samples.len());
+    for (i, &x) in samples.iter().enumerate() {
+        let p = prediction(predictor, &recon, base, width, i);
+        let s = q.symbol(x, p);
+        recon[i] = q.reconstruct(p, s);
+        symbols.push(s);
+    }
+    write_plane(out, &symbols)?;
+    Ok(recon)
+}
+
+fn read_channel(
+    data: &[u8],
+    at: &mut usize,
+    pixels: usize,
+    base: Option<&[u8]>,
+    width: usize,
+    predictor: Predictor,
+    q: Quantizer,
+) -> Result<Vec<u8>> {
+    match take(data, at, 1)?[0] {
+        CHANNEL_CONSTANT => Ok(vec![take(data, at, 1)?[0]; pixels]),
+        CHANNEL_CODED => {
+            // Symbols are replaced by samples in place; prediction only reads
+            // positions that are already reconstructed.
+            let mut plane = read_plane(data, at, pixels)?;
+            for i in 0..plane.len() {
+                let s = plane[i];
+                ensure!((s as i32) < q.range, "symbol outside quantizer range");
+                let p = prediction(predictor, &plane, base, width, i);
+                plane[i] = q.reconstruct(p, s);
+            }
+            Ok(plane)
+        }
+        kind => bail!("invalid channel kind {kind}"),
+    }
+}
+
 fn decode_native(width: u32, height: u32, plain: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let pixels = width as usize * height as usize;
+    let w = width as usize;
     let mut at = 0;
-    let mut rgba = vec![0u8; pixels * 4];
-    let fill = |rgba: &mut [u8], c: usize, v: u8| {
-        rgba.as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .for_each(|px| px[c] = v);
+    let header = take(plain, &mut at, 3)?;
+    let transform = match header[0] {
+        0 => Transform::Direct,
+        1 => Transform::SubtractGreen,
+        2 => Transform::Palette,
+        t => bail!("invalid transform {t}"),
     };
-    for c in 0..4 {
-        let kind = take(plain, &mut at, 1)?[0];
-        match kind {
-            0 => fill(&mut rgba, c, if c == 3 { 255 } else { 0 }),
-            1 => {
-                let v = take(plain, &mut at, 1)?[0];
-                fill(&mut rgba, c, v);
+    let predictor = match header[1] {
+        0 => Predictor::None,
+        1 => Predictor::Up,
+        p => bail!("invalid predictor {p}"),
+    };
+    let q = Quantizer::new(header[2]);
+    let mut rgba = vec![0u8; pixels * 4];
+    let out = rgba.as_chunks_mut::<4>().0;
+    if transform == Transform::Palette {
+        ensure!(header[2] == 0, "palette encoding is lossless only");
+        let count = take(plain, &mut at, 1)?[0] as usize + 1;
+        let colors = take(plain, &mut at, count * 4)?.as_chunks::<4>().0;
+        let indices = read_channel(plain, &mut at, pixels, None, w, predictor, q)?;
+        for (px, &i) in out.iter_mut().zip(&indices) {
+            *px = *colors
+                .get(i as usize)
+                .context("palette index out of range")?;
+        }
+    } else {
+        let mut green = None;
+        for c in CHANNEL_ORDER {
+            let base = if transform == Transform::SubtractGreen && (c == 0 || c == 2) {
+                green.as_deref()
+            } else {
+                None
+            };
+            let plane = read_channel(plain, &mut at, pixels, base, w, predictor, q)?;
+            for (px, &v) in out.iter_mut().zip(&plane) {
+                px[c] = v;
             }
-            2 => {
-                let min = take(plain, &mut at, 1)?[0];
-                let max = take(plain, &mut at, 1)?[0];
-                let _step = take(plain, &mut at, 1)?[0];
-                let residual = take(plain, &mut at, 1)?[0] != 0;
-                ensure!(min <= max, "channel minimum exceeds maximum");
-                let range = max - min;
-                let mut p = read_plane(plain, &mut at, pixels)?;
-                if residual {
-                    let lo = read_plane(plain, &mut at, pixels)?;
-                    let hi = read_plane(plain, &mut at, pixels)?;
-                    for ((v, &l), &h) in p.iter_mut().zip(&lo).zip(&hi) {
-                        let d = i16::from_le_bytes([l, h]);
-                        *v = (*v as i16 + d).clamp(0, 255) as u8;
-                    }
-                }
-                ensure!(
-                    p.iter().all(|&v| v <= range),
-                    "normalized value exceeds range"
-                );
-                for (px, &v) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(&p) {
-                    px[c] = v + min;
-                }
+            if c == 1 && transform == Transform::SubtractGreen {
+                green = Some(plane);
             }
-            _ => bail!("invalid channel descriptor {kind}"),
         }
     }
     ensure!(at == plain.len(), "trailing native stream bytes");
     Ok((width, height, rgba))
-}
-
-fn transform(input: &[u8], step: u8, tolerance: u8) -> Vec<u8> {
-    let mut out = input.to_vec();
-    if tolerance > 0 {
-        for chunk in out.chunks_mut(256) {
-            let mean = (chunk.iter().map(|&v| v as u32).sum::<u32>() / chunk.len() as u32) as u8;
-            for v in chunk {
-                if v.abs_diff(mean) <= tolerance {
-                    *v = mean;
-                }
-            }
-        }
-    }
-    let range_max = *input.iter().max().unwrap_or(&0) as u16;
-    if step > 1 {
-        for v in &mut out {
-            *v = (((*v as u16 + step as u16 / 2) / step as u16) * step as u16).min(range_max) as u8;
-        }
-    }
-    out
 }
 
 fn write_plane(out: &mut Vec<u8>, plane: &[u8]) -> Result<()> {
@@ -525,41 +729,65 @@ mod tests {
         let f = encode_rgba(61, 37, &p, EncodeOptions::default()).unwrap();
         assert_eq!(decode_rgba(&f).unwrap().2, p);
     }
+    /// Every candidate encoding, not just the one the encoder keeps.
     #[test]
-    fn residue_makes_transform_exact() {
-        let p = (0..(64 * 64))
-            .flat_map(|x| [x as u8, (x / 3) as u8, 9, 255])
-            .collect::<Vec<_>>();
-        let f = encode_rgba(
-            64,
-            64,
-            &p,
-            EncodeOptions {
-                quant_step: 7,
-                smooth_tolerance: 5,
-                residual: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(decode_rgba(&f).unwrap().2, p)
+    fn every_candidate_roundtrips() {
+        let mut few_colors = Vec::new();
+        let mut many_colors = Vec::new();
+        for y in 0..23u32 {
+            for x in 0..41u32 {
+                few_colors.extend([(x / 8 * 40) as u8, (y / 6 * 60) as u8, 30, 255]);
+                many_colors.extend([(x * 6) as u8, (y * 11) as u8, (x * y) as u8, (x + y) as u8]);
+            }
+        }
+        for rgba in [few_colors, many_colors] {
+            let (palette, list) = candidates(&rgba, 0);
+            for (transform, predictor) in list {
+                let plain =
+                    native_stream(41, &rgba, palette.as_ref(), transform, predictor, 0).unwrap();
+                let decoded = decode_native(41, 23, &plain).unwrap().2;
+                assert_eq!(decoded, rgba, "{transform:?}/{predictor:?}");
+            }
+        }
     }
     #[test]
-    fn lossy_narrow_range_decodes() {
-        let p = (0..256)
-            .flat_map(|i| [100 + (i % 10) as u8, 99, 98, 255])
-            .collect::<Vec<_>>();
-        let f = encode_rgba(
-            16,
-            16,
-            &p,
-            EncodeOptions {
-                quant_step: 7,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(decode_rgba(&f).unwrap().2.len(), p.len());
+    fn quantizer_bounds_error_for_every_input() {
+        for max_error in [0u8, 1, 2, 3, 4, 7, 10, 31, 64, 127, 200, 255] {
+            let q = Quantizer::new(max_error);
+            for x in 0..=255u8 {
+                for p in 0..=255 {
+                    let s = q.symbol(x, p);
+                    assert!((s as i32) < q.range);
+                    let r = q.reconstruct(p, s);
+                    assert!(
+                        x.abs_diff(r) <= max_error,
+                        "x={x} p={p} near={max_error} -> {r}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn near_lossless_stays_within_max_error() {
+        // Gradient plus small noise, like a photograph: the case near-lossless
+        // coding is for.
+        let mut seed = 7u32;
+        let mut noisy = |v: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (v + (seed >> 29)).min(255) as u8
+        };
+        let p: Vec<u8> = (0..64 * 64u32)
+            .flat_map(|i| [noisy(i % 64 * 3), noisy(i / 64 * 3), noisy(128), 255])
+            .collect();
+        let lossless = encode_rgba(64, 64, &p, EncodeOptions::default()).unwrap();
+        let options = EncodeOptions {
+            max_error: 3,
+            ..Default::default()
+        };
+        let lossy = encode_rgba(64, 64, &p, options).unwrap();
+        let decoded = decode_rgba(&lossy).unwrap().2;
+        assert!(p.iter().zip(&decoded).all(|(a, b)| a.abs_diff(*b) <= 3));
+        assert!(lossy.len() < lossless.len());
     }
     /// Deterministic mix of flat runs, gradients and noise.
     fn mixed_plane(n: usize) -> Vec<u8> {
@@ -575,6 +803,8 @@ mod tests {
             })
             .collect()
     }
+    /// Direct transform, no predictor, lossless, four constant channels.
+    const ALL_CONSTANT: [u8; 11] = [0, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4];
     fn native_file(width: u32, height: u32, plain: &[u8]) -> Vec<u8> {
         let z = zstd::stream::encode_all(plain, 3).unwrap();
         container(width, height, STORAGE_NATIVE, plain.len() as u64, &z)
@@ -634,18 +864,38 @@ mod tests {
             }
         }
     }
-    #[test]
-    fn rejects_channel_min_above_max() {
-        // R: variable, min=200, max=10, one RAW block holding a single 0.
-        let mut plain = vec![2u8, 200, 10, 1, 0];
+    /// Plain stream with one coded 1x1 RAW channel holding `symbol`.
+    fn single_symbol(header: [u8; 3], extra: &[u8], symbol: u8) -> Vec<u8> {
+        let mut plain = header.to_vec();
+        plain.extend(extra);
+        plain.push(CHANNEL_CODED);
         plain.extend(1u32.to_le_bytes());
         plain.extend(1u16.to_le_bytes());
         plain.push(0);
         plain.extend(1u32.to_le_bytes());
-        plain.push(0);
-        plain.extend([0, 0, 0]);
-        let err = decode_rgba(&native_file(1, 1, &plain)).unwrap_err();
-        assert!(err.to_string().contains("minimum exceeds maximum"), "{err}");
+        plain.push(symbol);
+        plain
+    }
+    #[test]
+    fn rejects_malformed_native_streams() {
+        let cases: [(&str, Vec<u8>); 5] = [
+            ("invalid transform", vec![3, 0, 0]),
+            ("invalid predictor", vec![0, 2, 0]),
+            ("lossless only", vec![2, 0, 1, 0, 1, 2, 3, 4]),
+            (
+                "palette index out of range",
+                single_symbol([2, 0, 0], &[0, 9, 9, 9, 9], 1),
+            ),
+            (
+                "symbol outside quantizer range",
+                // max_error 127 leaves a range of 3 symbols.
+                single_symbol([0, 0, 127], &[], 3),
+            ),
+        ];
+        for (expected, plain) in cases {
+            let err = decode_rgba(&native_file(1, 1, &plain)).unwrap_err();
+            assert!(format!("{err:#}").contains(expected), "{expected}: {err:#}");
+        }
     }
     #[test]
     fn rejects_payload_inflating_past_declared_length() {
@@ -655,16 +905,16 @@ mod tests {
     }
     #[test]
     fn rejects_dimensions_over_memory_limit_before_allocating() {
-        let file = native_file(8192, 8192, &[0, 0, 0, 0]);
+        let file = native_file(8192, 8192, &ALL_CONSTANT);
         let limits = DecodeLimits {
             max_alloc: 1 << 20,
             ..Default::default()
         };
         let err = decode_rgba_with_limits(&file, limits).unwrap_err();
         assert!(err.to_string().contains("memory limit"), "{err}");
-        // Within the default limit the same all-absent stream is valid.
+        // Within the default limit the same all-constant stream is valid.
         assert_eq!(
-            decode_rgba(&native_file(64, 64, &[0, 0, 0, 0]))
+            decode_rgba(&native_file(64, 64, &ALL_CONSTANT))
                 .unwrap()
                 .2
                 .len(),
@@ -673,7 +923,7 @@ mod tests {
     }
     #[test]
     fn rejects_nonzero_flags() {
-        let mut file = native_file(1, 1, &[0, 0, 0, 0]);
+        let mut file = native_file(1, 1, &ALL_CONSTANT);
         file[6] = 1;
         assert!(decode_rgba(&file).is_err());
     }

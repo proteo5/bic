@@ -12,7 +12,7 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(about = "Experimental BIC1 planar RGBA codec and viewer")]
+#[command(about = "Experimental BIC2 planar RGBA codec and viewer")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -26,12 +26,10 @@ enum Command {
     Encode {
         input: PathBuf,
         output: PathBuf,
-        #[arg(long, default_value_t = 1)]
-        quant_step: u8,
+        /// Largest allowed per-sample error; 0 is lossless
         #[arg(long, default_value_t = 0)]
-        smooth_tolerance: u8,
-        #[arg(long)]
-        residual: bool,
+        max_error: u8,
+        /// Store a PNG instead when it is smaller (lossless only)
         #[arg(long)]
         png_fallback: bool,
         #[arg(long, default_value_t = 9)]
@@ -163,9 +161,7 @@ fn main() -> Result<()> {
         Command::Encode {
             input,
             output,
-            quant_step,
-            smooth_tolerance,
-            residual,
+            max_error,
             png_fallback,
             zstd_level,
         } => {
@@ -175,9 +171,7 @@ fn main() -> Result<()> {
                 i.height(),
                 i.as_raw(),
                 EncodeOptions {
-                    quant_step,
-                    smooth_tolerance,
-                    residual,
+                    max_error,
                     png_fallback,
                     zstd_level,
                 },

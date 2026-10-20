@@ -1,4 +1,5 @@
-//! Property-based tests: roundtrip guarantees for generated images, and
+//! Property-based tests: roundtrip and error-bound guarantees for generated
+//! images, and
 //! "never panics" for mutated streams (a stable-toolchain stand-in for the
 //! cargo-fuzz targets in `fuzz/`). Each property runs 256 cases by default;
 //! set `PROPTEST_CASES` for a longer run.
@@ -100,28 +101,24 @@ proptest! {
     }
 
     #[test]
-    fn residual_restores_lossy_transform(
-        (w, h, p) in image(),
-        quant_step in 1u8..=40,
-        smooth_tolerance in 0u8..=20,
-    ) {
-        let options = EncodeOptions { quant_step, smooth_tolerance, residual: true, ..Default::default() };
-        let file = encode_rgba(w, h, &p, options).unwrap();
-        prop_assert_eq!(decode_rgba(&file).unwrap(), (w, h, p));
-    }
-
-    #[test]
-    fn lossy_error_is_bounded(
-        (w, h, p) in image(),
-        quant_step in 1u8..=40,
-        smooth_tolerance in 0u8..=20,
-    ) {
-        let options = EncodeOptions { quant_step, smooth_tolerance, ..Default::default() };
+    fn near_lossless_error_is_bounded((w, h, p) in image(), max_error in 0u8..=60) {
+        let options = EncodeOptions { max_error, ..Default::default() };
         let (dw, dh, d) = decode_rgba(&encode_rgba(w, h, &p, options).unwrap()).unwrap();
         prop_assert_eq!((dw, dh, d.len()), (w, h, p.len()));
-        let bound = smooth_tolerance + quant_step / 2;
         for (i, (a, b)) in p.iter().zip(&d).enumerate() {
-            prop_assert!(a.abs_diff(*b) <= bound, "sample {} differs by {} > {}", i, a.abs_diff(*b), bound);
+            prop_assert!(a.abs_diff(*b) <= max_error, "sample {} differs by {} > {}", i, a.abs_diff(*b), max_error);
+        }
+    }
+
+    /// Every candidate the encoder may pick, not only the smallest one.
+    #[test]
+    fn every_candidate_meets_its_error_bound((w, h, p) in image(), max_error in prop_oneof![Just(0u8), 1u8..=60]) {
+        let (palette, list) = candidates(&p, max_error);
+        for (transform, predictor) in list {
+            let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, max_error).unwrap();
+            let (_, _, d) = decode_native(w, h, &plain).unwrap();
+            prop_assert_eq!(d.len(), p.len());
+            prop_assert!(p.iter().zip(&d).all(|(a, b)| a.abs_diff(*b) <= max_error), "{:?}/{:?}", transform, predictor);
         }
     }
 
@@ -146,12 +143,16 @@ proptest! {
     #[test]
     fn mutated_native_stream_never_panics(
         (w, h, p) in image(),
+        max_error in prop_oneof![Just(0u8), 1u8..=60],
+        pick: bool,
         edits in prop::collection::vec((any::<usize>(), any::<u8>()), 0..6),
         cut in prop::option::of(any::<usize>()),
         tail in prop::collection::vec(any::<u8>(), 0..4),
     ) {
         // Mutating the plain stream (not the Zstd bytes) reaches the parser.
-        let plain = native_stream(w, h, &p, EncodeOptions::default()).unwrap();
+        let (palette, list) = candidates(&p, max_error);
+        let (transform, predictor) = list[pick as usize];
+        let plain = native_stream(w as usize, &p, palette.as_ref(), transform, predictor, max_error).unwrap();
         let _ = decode_native(w, h, &mutate(plain, &edits, cut, &tail));
     }
 
