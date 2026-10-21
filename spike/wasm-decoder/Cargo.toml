@@ -1,0 +1,24 @@
+[package]
+name = "bic-wasm-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Spike: BIC decoder compiled to WebAssembly (not published)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bic = { path = "../..", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
+
+[target.wasm32-unknown-unknown.dependencies]
+ruzstd = "0.9.1"

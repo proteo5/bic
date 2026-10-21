@@ -2,3 +2,9 @@
 /tests
 site/raw/
 site/out/
+spike/wasm-decoder/target/
+spike/sw-test/node_modules/
+spike/js-size/node_modules/
+spike/js-size/package-lock.json
+spike/sw-demo/bic.wasm
+spike/sw-demo/assets/

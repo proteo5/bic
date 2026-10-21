@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BIC spike: Service Worker</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1.5rem; }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; }
+  figure { margin: 0; border: 1px solid #ccc; padding: .5rem; }
+  figure img { display: block; max-width: 360px; max-height: 260px; }
+  pre { background: #f4f4f4; padding: .5rem; max-height: 320px; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>BIC spike: .bic in &lt;img&gt;</h1>
+<p id="status">loading…</p>
+
+<div class="row">
+  <figure>
+    <img id="chart" src="assets/bar-chart.bic" alt="bar chart"
+         onerror="this.onerror=null; this.src='assets/bar-chart.png'">
+    <figcaption>bar-chart (.bic, PNG fallback)</figcaption>
+  </figure>
+  <figure>
+    <img id="ui" src="assets/ui-screenshot.bic" alt="interface"
+         onerror="this.onerror=null; this.src='assets/ui-screenshot.png'">
+    <figcaption>ui-screenshot (.bic, PNG fallback)</figcaption>
+  </figure>
+  <figure>
+    <img id="photo" src="assets/photo-landscape-1.bic" alt="photo"
+         onerror="this.onerror=null; this.src='assets/photo-landscape-1.jpg'">
+    <figcaption>photo (.bic keeps the JPEG)</figcaption>
+  </figure>
+</div>
+
+<h2>Log</h2>
+<pre id="log"></pre>
+
+<script>
+const log = (line) => { document.getElementById('log').textContent += line + '\n'; };
+const status = (text) => { document.getElementById('status').textContent = text; };
+
+// Use the Service Worker for this page as soon as it is installed.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const d = event.data;
+    if (d.error) log('SW error ' + d.url + ': ' + d.error);
+    else log(`SW ${d.mode}: ${d.url.split('/').pop()} network=${d.network} B served=${d.served} B`);
+  });
+  navigator.serviceWorker.register('sw.js').then(() => status('service worker registered; controlled: ' + !!navigator.serviceWorker.controller));
+}
+
+window.addEventListener('load', () => {
+  // Resource timing: bytes that actually crossed the network for each image.
+  for (const e of performance.getEntriesByType('resource')) {
+    if (/\.(bic|png|jpg)$/.test(e.name)) {
+      log(`net ${e.name.split('/').pop()}: transfer=${e.transferSize} B, body=${e.encodedBodySize} B, initiator=${e.initiatorType}`);
+    }
+  }
+  status((navigator.serviceWorker.controller ? 'controlled by SW' : 'not controlled by SW (first visit)') +
+         '; images: ' + [...document.images].map((i) => i.naturalWidth + 'x' + i.naturalHeight + ' ' + i.src.split('/').pop()).join(', '));
+});
+</script>
+</body>
+</html>

@@ -56,6 +56,35 @@
 use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 
+/// Zstandard compression. Only native builds can encode.
+fn zstd_compress(data: &[u8], level: i32) -> Result<Vec<u8>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Ok(zstd::bulk::compress(data, level)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (data, level);
+        bail!("encoding is not available in the WebAssembly build")
+    }
+}
+
+/// Zstandard decompression into exactly `len` bytes. Output longer than `len`
+/// is an error, so a payload cannot inflate past its declared size.
+fn zstd_decompress(payload: &[u8], len: usize) -> Result<Vec<u8>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return Ok(zstd::bulk::decompress(payload, len)?);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut out = vec![0u8; len];
+        let written = ruzstd::decoding::FrameDecoder::new()
+            .decode_all(payload, &mut out)
+            .map_err(|e| anyhow::anyhow!("Zstandard: {e:?}"))?;
+        out.truncate(written);
+        Ok(out)
+    }
+}
+
 mod source;
 pub use source::{embeddable_format, read_source, EmbeddableFormat, Source};
 
@@ -302,6 +331,9 @@ pub fn encode_rgba_with_metadata(
     if let Some(icc) = icc {
         ensure!(icc.len() <= MAX_ICC, "ICC profile exceeds {MAX_ICC} bytes");
     }
+    if cfg!(target_arch = "wasm32") {
+        bail!("encoding is not available in the WebAssembly build");
+    }
     let (palette, candidates) = candidates(rgba, options.max_error, options.fast_decode);
     let encode = |(transform, predictor, error): Candidate| -> Result<(usize, Vec<u8>)> {
         let plain = native_stream(
@@ -312,10 +344,7 @@ pub fn encode_rgba_with_metadata(
             predictor,
             error,
         )?;
-        Ok((
-            plain.len(),
-            zstd::bulk::compress(&plain, options.zstd_level)?,
-        ))
+        Ok((plain.len(), zstd_compress(&plain, options.zstd_level)?))
     };
     // Candidates are independent, so they are encoded in parallel.
     let results: Vec<Result<(usize, Vec<u8>)>> = std::thread::scope(|scope| {
@@ -515,7 +544,7 @@ pub fn decode_with_metadata(file: &[u8], limits: DecodeLimits) -> Result<Decoded
     );
     // Bounded decompression: a payload that inflates past plain_len fails
     // instead of growing without limit.
-    let plain = zstd::bulk::decompress(c.payload, plain_len).context("Zstd payload")?;
+    let plain = zstd_decompress(c.payload, plain_len).context("Zstd payload")?;
     ensure!(plain.len() == plain_len, "Zstd output length mismatch");
     let (_, _, rgba) = decode_native(width, height, &plain)?;
     Ok(Decoded {
@@ -1330,6 +1359,7 @@ mod tests {
         assert!(encode_rgba_with_metadata(1, 1, &p, &huge, EncodeOptions::default()).is_err());
     }
     /// A noisy photo-like JPEG: much smaller than any lossless encoding.
+    #[cfg(feature = "formats")]
     fn noisy_jpeg() -> Vec<u8> {
         let mut seed = 5u32;
         let img = image::RgbaImage::from_fn(120, 80, |x, y| {
@@ -1344,6 +1374,7 @@ mod tests {
         });
         source::tests::jpeg_with_orientation(&img, 1)
     }
+    #[cfg(feature = "formats")]
     #[test]
     fn keeps_a_smaller_original_file() {
         let jpeg = noisy_jpeg();
@@ -1385,6 +1416,7 @@ mod tests {
         assert!(file.len() < png.len());
         assert_eq!(decode_rgba(&file).unwrap().2, img.into_raw());
     }
+    #[cfg(feature = "formats")]
     #[test]
     fn rejects_unsupported_or_mismatched_embedded_files() {
         let bmp_like = container_with_icc(1, 1, STORAGE_ORIGINAL, 0, None, b"BM\0\0\0\0");

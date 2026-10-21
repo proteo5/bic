@@ -1,0 +1,51 @@
+[
+ {
+  "id": "ui-screenshot",
+  "kind": "flat",
+  "width": 1600,
+  "height": 859,
+  "sha256": "8ce1c9e89628e1d7250d01ca38ffe8a468b5dbe1a46d640142ebce547de059df"
+ },
+ {
+  "id": "flowchart",
+  "kind": "flat",
+  "width": 706,
+  "height": 905,
+  "sha256": "f42fee4e4452d2bde8fa31d9eca50fb198cca7bf452d65625741726d6836fa6a"
+ },
+ {
+  "id": "bar-chart",
+  "kind": "flat",
+  "width": 1600,
+  "height": 800,
+  "sha256": "79a4d5f89a677b91cfc57b2c3da5000bbfe51c1d0c05212376874ada4248ff19"
+ },
+ {
+  "id": "icon",
+  "kind": "flat",
+  "width": 512,
+  "height": 512,
+  "sha256": "f3f64fde5c60fd62b283230c0bae790f3d5354a33afbe212d08737d9d03a4420"
+ },
+ {
+  "id": "pixel-art",
+  "kind": "flat",
+  "width": 800,
+  "height": 480,
+  "sha256": "7ab761f0fdb5c0c4596bfed3ed3c246586871438ba52b65c2e544a9fb09f6c46"
+ },
+ {
+  "id": "photo-landscape-1",
+  "kind": "photo",
+  "width": 1600,
+  "height": 1064,
+  "sha256": "f56438c38baba61dc7faede18311782cd1aab39273cdb7e7f758bc82080c8c11"
+ },
+ {
+  "id": "photo-landscape-2",
+  "kind": "photo",
+  "width": 1600,
+  "height": 1067,
+  "sha256": "5060cd03742f542256a15cce14a7e57f90fd916daa8ce6aa249b3ef6736f59a3"
+ }
+]

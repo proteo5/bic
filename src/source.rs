@@ -67,7 +67,12 @@ fn is_heif(bytes: &[u8]) -> bool {
 pub fn read_source(bytes: &[u8], limits: DecodeLimits) -> Result<Source> {
     let embeddable = embeddable_format(bytes);
     let mut source = if embeddable == Some(EmbeddableFormat::Heif) {
-        read_heif(bytes, limits)?
+        #[cfg(feature = "formats")]
+        {
+            read_heif(bytes, limits)?
+        }
+        #[cfg(not(feature = "formats"))]
+        bail!("HEIF sources need the `formats` feature")
     } else {
         read_with_image(bytes, limits)?
     };
@@ -109,6 +114,7 @@ fn read_with_image(bytes: &[u8], limits: DecodeLimits) -> Result<Source> {
     })
 }
 
+#[cfg(feature = "formats")]
 fn read_heif(bytes: &[u8], limits: DecodeLimits) -> Result<Source> {
     let options = heic_rs::DecodeOptions::default()
         .with_layout(heic_rs::PixelLayout::Rgba8)
@@ -170,6 +176,7 @@ pub(crate) mod tests {
         out
     }
 
+    #[cfg(feature = "formats")]
     #[test]
     fn applies_exif_orientation() {
         // 16x8, left half black, right half white.

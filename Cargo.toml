@@ -17,10 +17,15 @@ exclude = ["/fuzz", "/.github", "/tests"]
 no-default-features = true
 
 [features]
-default = ["cli"]
+default = ["cli", "formats"]
+# Decoding of JPEG and WebP sources, and HEIF sources, which are stored in
+# BIC files unchanged. Browsers decode JPEG and WebP natively, so the
+# WebAssembly build leaves this feature out.
+formats = ["dep:heic-rs", "image/jpeg", "image/webp"]
 # The `bic` command-line tool and the `bic-view` viewer. The codec library
 # itself needs none of these.
 cli = [
+    "formats",
     "dep:clap",
     "dep:minifb",
     "dep:oxipng",
@@ -44,13 +49,20 @@ required-features = ["cli"]
 [dependencies]
 anyhow = "1.0"
 # The codec reads the formats a BIC file may embed: PNG, JPEG, WebP, HEIF.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-heic-rs = "0.1.4"
-zstd = "0.13"
+image = { version = "0.25", default-features = false, features = ["png"] }
+heic-rs = { version = "0.1.4", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }
 minifb = { version = "0.28", optional = true }
 oxipng = { version = "10.2.1", default-features = false, features = ["parallel"], optional = true }
 rfd = { version = "0.17", optional = true }
+
+# Zstandard: the C library for native builds (fast encoder and decoder), and
+# a pure Rust decoder for WebAssembly, where the C library does not build.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zstd = "0.13"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ruzstd = "0.9"
 
 [dev-dependencies]
 proptest = "1"

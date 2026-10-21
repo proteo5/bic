@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BIC spike: deferred source</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1.5rem; }
+  img { display: block; max-width: 360px; max-height: 260px; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<h1>BIC spike: deferred source selection</h1>
+<p id="status">loading…</p>
+<!-- No src in the HTML: the browser fetches nothing until the script below
+     chooses one, so a PNG is never downloaded on a visit that uses the .bic. -->
+<img id="chart" alt="bar chart" data-bic="assets/bar-chart.bic" data-png="assets/bar-chart.png">
+<img id="ui" alt="interface" data-bic="assets/ui-screenshot.bic" data-png="assets/ui-screenshot.png">
+<img id="photo" alt="photo" data-bic="assets/photo-landscape-1.bic" data-png="assets/photo-landscape-1.jpg">
+<noscript><p>JavaScript is needed to choose the image format.</p></noscript>
+<h2>Log</h2>
+<pre id="log"></pre>
+<script>
+const log = (line) => { document.getElementById('log').textContent += line + '\n'; };
+const controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+for (const img of document.querySelectorAll('img[data-bic]')) {
+  img.src = controlled ? img.dataset.bic : img.dataset.png;
+}
+document.getElementById('status').textContent = 'controlled by SW at parse time: ' + controlled;
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const d = event.data;
+    if (d.error) log('SW error ' + d.url + ': ' + d.error);
+    else log(`SW ${d.mode}: ${d.url.split('/').pop()} network=${d.network} B`);
+  });
+  navigator.serviceWorker.register('sw.js');
+}
+</script>
+</body>
+</html>
