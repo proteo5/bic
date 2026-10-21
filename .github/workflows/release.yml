@@ -47,15 +47,18 @@ jobs:
           cp "target/${{ matrix.target }}/release/bic$ext" \
              "target/${{ matrix.target }}/release/bic-view$ext" \
              README.md LICENSE CHANGELOG.md FORMAT.md "$name/"
+          # Archives go to their own folder so the upload cannot pick up the
+          # staging folder (whose name also contains dots).
+          mkdir -p out
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            7z a "$name.zip" "$name" > /dev/null
+            7z a "out/$name.zip" "$name" > /dev/null
           else
-            tar czf "$name.tar.gz" "$name"
+            tar czf "out/$name.tar.gz" "$name"
           fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: bic-*.*
+          path: out/*
           if-no-files-found: error
 
   release:
@@ -74,7 +77,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd dist
-          sha256sum bic-* > SHA256SUMS.txt
+          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
           cd ..
           # Release notes: this version's CHANGELOG section.
           version="${GITHUB_REF_NAME#v}"
