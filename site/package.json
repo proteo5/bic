@@ -1,0 +1,12 @@
+{
+  "name": "bic-site",
+  "private": true,
+  "description": "Source of the BIC demo page. Uses the published @proteo5/bic-runtime package.",
+  "type": "module",
+  "dependencies": {
+    "@proteo5/bic-runtime": "^0.2.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

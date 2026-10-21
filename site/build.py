@@ -1,41 +1,60 @@
-"""Build the demo page: encode each example with bic, measure it against the
-usual formats, and write a static site to site/out.
+"""Build the BIC site: the demo page and the documentation, in English and Spanish.
 
-Every number on the page is measured here, not copied. The page shows
-lossless and lossy alternatives side by side, and says where BIC is not the
-smallest option.
+Measures every example (sizes of the lossless and lossy alternatives, and the
+.bic file the encoder writes), verifies each .bic with `bic verify`, and writes
+a static site to site/out:
 
-Usage (after `cargo build --release`):
+  index.html, es/index.html            the demo page
+  docs/index.html, es/docs/index.html  the documentation
+  assets/style.css, assets/app.js      styles (light and dark) and the page script
+  bic/, img/                           the example files
+  results.json, size.json              the measurements
+
+Every number on the site comes from this build. The live examples are decoded
+in the visitor's browser by the published @proteo5/bic-runtime package.
+
+Usage (after `cargo build --release --bin bic` and `npm ci` in site/):
     python site/build.py
 """
 
 import csv
+import hashlib
 import html
 import io
 import json
 import os
 import shutil
+import posixpath
 import subprocess
 import sys
 
 from PIL import Image
 
+from docs_text import DOCS
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SOURCES = os.path.join(HERE, "sources")
 OUT = os.path.join(HERE, "out")
+APP = os.path.join(HERE, "app")
 BIC = os.environ.get(
     "BIC_BIN",
     os.path.join(ROOT, "target", "release", "bic" + (".exe" if os.name == "nt" else "")),
 )
+RUNTIME_PACKAGE = os.path.join(HERE, "node_modules", "@proteo5", "bic-runtime", "package.json")
+FIXTURES = os.path.join(ROOT, "packages", "bic-runtime", "test", "fixtures", "manifest.json")
 MB = 1_000_000  # bandwidth is reported in decimal megabytes
+REPO = "https://github.com/proteo5/bic"
 
 
-def run(*args):
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+def run(*args, cwd=None):
+    result = subprocess.run(args, capture_output=True, text=True, check=False, cwd=cwd)
     if result.returncode != 0:
         sys.exit(f"command failed: {' '.join(args)}\n{result.stderr or result.stdout}")
     return result.stdout
+
+
+# ---- Measurements ---------------------------------------------------------
 
 
 def has_alpha(image):
@@ -57,9 +76,9 @@ def lossy_sizes(path):
     sizes["avif_q50"] = buf.tell()
 
     # JPEG has no alpha: flatten onto white, which is what a web page shows.
-    rgb = image.convert("RGBA")
-    flat = Image.new("RGB", rgb.size, (255, 255, 255))
-    flat.paste(rgb, mask=rgb.getchannel("A"))
+    rgba = image.convert("RGBA")
+    flat = Image.new("RGB", rgba.size, (255, 255, 255))
+    flat.paste(rgba, mask=rgba.getchannel("A"))
     buf = io.BytesIO()
     flat.save(buf, "JPEG", quality=85, optimize=True)
     sizes["jpeg_q85"] = buf.tell()
@@ -77,8 +96,7 @@ def measure_bic(source, bic_path):
 
 
 def native_measurements(bench_csv):
-    """Pixel-level sizes from `bic compare`: PNG, oxipng, WebP lossless and
-    BIC's own coding (before the original-file option)."""
+    """Pixel-level sizes from `bic compare`: PNG, oxipng, WebP lossless, BIC's own coding."""
     rows = {}
     with open(bench_csv, encoding="utf-8") as f:
         for row in csv.DictReader(f):
@@ -93,6 +111,15 @@ def native_measurements(bench_csv):
     return rows
 
 
+def sha256_of_pixels(path):
+    return hashlib.sha256(Image.open(path).convert("RGBA").tobytes()).hexdigest()
+
+
+def sha256_of_file(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def kib(n):
     return f"{n / 1024:,.1f}"
 
@@ -102,12 +129,20 @@ def pct(a, b):
     return (1 - a / b) * 100
 
 
+DESCRIPTIONS_ES = {
+    "ui-screenshot": "Interfaz de software (captura)",
+    "flowchart": "Diagrama de flujo",
+    "bar-chart": "Gráfica de barras",
+    "icon": "Ícono con transparencia",
+    "pixel-art": "Pixel art",
+    "photo-landscape-1": "Fotografía de paisaje",
+    "photo-landscape-2": "Fotografía de paisaje",
+}
+
+
 def build_rows(manifest):
-    os.makedirs(OUT, exist_ok=True)
-    bic_dir = os.path.join(OUT, "bic")
-    img_dir = os.path.join(OUT, "img")
-    os.makedirs(bic_dir, exist_ok=True)
-    os.makedirs(img_dir, exist_ok=True)
+    os.makedirs(os.path.join(OUT, "bic"), exist_ok=True)
+    os.makedirs(os.path.join(OUT, "img"), exist_ok=True)
 
     bench = os.path.join(OUT, "bench.csv")
     run(BIC, "compare", SOURCES, "--csv", bench)
@@ -117,8 +152,8 @@ def build_rows(manifest):
     for entry in manifest:
         source = os.path.join(SOURCES, entry["file"])
         stem = os.path.splitext(entry["file"])[0]
-        bic_path = os.path.join(bic_dir, stem + ".bic")
-        shutil.copy(source, os.path.join(img_dir, entry["file"]))
+        bic_path = os.path.join(OUT, "bic", stem + ".bic")
+        shutil.copy(source, os.path.join(OUT, "img", entry["file"]))
         bic = measure_bic(source, bic_path)
         lossy = lossy_sizes(source)
         pixels = native[stem]
@@ -138,19 +173,28 @@ def build_rows(manifest):
         best_lossy_name = min(lossy_named, key=lossy_named.get)
         best_lossy = lossy_named[best_lossy_name]
 
-        # A kept original is lossy already, so a lossless comparison is not
-        # meaningful: report it as not applicable instead of a percentage.
         if bic["kept_original"]:
+            # The source is lossy already: a lossless comparison does not apply.
             saving = None
             mb_per_1000 = None
+            expected = sha256_of_file(source)
+            kind = "file"
         else:
             saving = pct(bic["bytes"], best_lossless)
             mb_per_1000 = (best_lossless - bic["bytes"]) * 1000 / MB
+            expected = sha256_of_pixels(source)
+            kind = "pixels"
+        with Image.open(source) as image:
+            width, height = image.size
         rows.append({
             **entry,
+            "stem": stem,
+            "width": width,
+            "height": height,
             "bic_bytes": bic["bytes"],
             "kept_original": bic["kept_original"],
-            "bic_native": pixels["bic_native"],
+            "kind": kind,
+            "sha256": expected,
             "lossless": lossless,
             "lossy": lossy_named,
             "best_lossless": best_lossless_name,
@@ -159,7 +203,6 @@ def build_rows(manifest):
             "mb_per_1000_views": mb_per_1000,
             "lossy_smaller_than_bic": best_lossy < bic["bytes"],
             "lossy_saving": pct(best_lossy, bic["bytes"]),
-            "lossy_note": None,
             "decode_ms": pixels["decode_ms"],
         })
         print(f"{entry['id']:20} bic {bic['bytes']:>9} best lossless {best_lossless_name} "
@@ -167,345 +210,521 @@ def build_rows(manifest):
     return rows
 
 
-# ---------------------------------------------------------------------------
-# Rendering. English is the primary language (/), Spanish is /es/. Both pages
-# show the same measurements; only the text changes.
-# ---------------------------------------------------------------------------
+def example_title(row, lang):
+    return row["description"] if lang == "en" else DESCRIPTIONS_ES.get(row["id"], row["description"])
 
-DESCRIPTIONS_ES = {
-    "ui-screenshot": "Interfaz de software (captura)",
-    "flowchart": "Diagrama de flujo",
-    "bar-chart": "Gráfica de barras",
-    "icon": "Ícono con transparencia",
-    "pixel-art": "Pixel art",
-    "photo-landscape-1": "Fotografía de paisaje",
-    "photo-landscape-2": "Fotografía de paisaje",
-}
 
-STRINGS = {
+# ---- Page text ------------------------------------------------------------
+
+HOME = {
     "en": {
-        "lang_code": "en",
-        "switch_href": "es/",
-        "switch_label": "Español",
-        "title": "BIC: when it makes files smaller, and when it does not",
-        "h1": "BIC: when it makes files smaller, and when it does not",
-        "lead": ("BIC is a lossless image format. On some flat graphics it is smaller "
-                 "than optimized PNG, and on others it is larger. Lossy formats such as "
-                 "WebP and AVIF are often much smaller, but they change pixel values. "
-                 "The results below are measured on each example, including the cases "
-                 "where BIC loses."),
-        "note_win": "Where BIC was smaller than optimized PNG:",
-        "note_win_text": "a bar chart and an icon with few colors.",
-        "note_lose": "Where it was larger:",
-        "note_lose_text": ("a software interface with anti-aliased text, pixel art and a "
-                           "flowchart. Real screenshots have many colors, and BIC's palette "
-                           "mode does not apply to them."),
-        "note_photo": "Photographs:",
-        "note_photo_text": "BIC stores the JPEG unchanged, adding 32 bytes. Use JPEG, WebP or AVIF.",
-        "h_results": "Results",
-        "results_intro": ("All sizes are in KiB. &ldquo;Best lossless&rdquo; is the smallest of "
-                          "PNG, oxipng and WebP lossless. The last three columns are lossy "
-                          "formats, which keep fewer pixel values exactly. &ldquo;MB saved per "
-                          "1,000 views&rdquo; multiplies the difference by 1,000 transfers of the "
-                          "same image. Negative values mean BIC is larger."),
-        "th": ["Example", "Pixels", "PNG", "oxipng", "WebP lossless", "BIC file",
-               "Best lossless", "BIC smaller by", "MB saved per 1,000 views",
-               "WebP q80", "AVIF q50", "JPEG q85", "What to use"],
-        "kind": {"flat": "flat graphics", "photo": "photograph"},
-        "na": "n/a",
-        "lossy_photo_note": ("BIC keeps the source JPEG (quality 90) as it is. "
-                             "Lossless formats are much larger for photographs."),
+        "lang": "en",
+        "title": "BIC: a lossless image format for charts, logos and icons",
+        "description": "BIC is a lossless image format: smaller than optimized PNG on some flat graphics; photographs stay JPEG. Decoded in the browser by a 5.7 KiB library.",
+        "nav_home": "Home", "nav_docs": "Documentation", "nav_results": "Results", "nav_live": "Live examples",
+        "lang_switch": "Español", "lang_href": "../es/", "lang_hreflang": "es",
+        "theme_dark": "Switch to dark theme", "theme_light": "Switch to light theme",
+        "eyebrow": "Lossless · open source · Apache-2.0",
+        "h1": "A lossless image format for charts, logos and icons",
+        "lead": "BIC stores flat graphics in fewer bytes than optimized PNG. Photographs stay as their original JPEG. The decoder runs in the browser, and you can try it below on real files.",
+        "cta_docs": "Read the documentation", "cta_github": "View on GitHub", "cta_npm": "npm package",
+        "install_runtime": "Decoder for browsers and Node.js", "install_build": "Build step for Vite and webpack",
+        "copy": "Copy", "copied": "Copied",
+        "stats": [("{decoder} KiB", "decoder, gzip, one dependency (fzstd)"),
+                  ("{fixtures}", "test cases checked against the Rust decoder"),
+                  ("{best}%", "smaller than the best lossless format, best example")],
+        "live_title": "Live: real .bic files, decoded in your browser",
+        "live_lead": "Each file below is decoded right now by @proteo5/bic-runtime from npm, with no server involved. The result is compared with the source pixels, byte for byte.",
+        "drop_title": "Try your own .bic file",
+        "drop_text": "Drop a .bic file here, or choose one. It is decoded in your browser; nothing is uploaded.",
+        "drop_choose": "Choose file", "drop_png": "Download as PNG",
+        "example_png": "PNG source", "example_bic": ".bic file",
+        "results_title": "Results",
+        "results_lead": "Measured on the example images below. Sizes in KiB. \"Best lossless\" is the smallest of PNG, oxipng and WebP lossless. The last three columns are lossy formats, which change pixel values. \"MB saved per 1,000 views\" multiplies the difference by 1,000 transfers. Negative values mean BIC is larger.",
+        "th": ["Example", "Pixels", "PNG", "oxipng", "WebP lossless", "BIC file", "Best lossless", "BIC smaller by", "MB saved / 1,000 views", "WebP q80", "AVIF q50", "JPEG q85", "Verdict"],
+        "pill_good": "Use BIC", "pill_bad": "Keep the PNG", "pill_jpeg": "Keep the JPEG",
+        "verdict_good": "{pct}% smaller than {best}.", "verdict_bad": "{best} is smaller. Keep it.",
+        "verdict_photo": "The original JPEG is stored as it is, so BIC adds nothing here.",
         "lossy_note": "Lossy {fmt} is {pct}% smaller than BIC, if exact pixels are not needed.",
-        "verdict_photo": "Stores the original JPEG, so BIC adds nothing: use JPEG, WebP or AVIF for photographs.",
-        "verdict_good": "Good fit: {pct}% smaller than {best}.",
-        "verdict_bad": "Not a good fit: {best} is smaller. Use it instead.",
-        "h_bandwidth": "How the bandwidth figure is calculated",
-        "bandwidth": ("Image files are already compressed, so a web server does not shrink them "
-                      "further. The bytes saved on every transfer are therefore the file-size "
-                      "difference. Multiply by the number of views to get the total. A 20&nbsp;% "
-                      "saving on a 150&nbsp;KiB screenshot is about 30&nbsp;KiB per view, which "
-                      "matters on a busy site and little on a single page."),
-        "h_view": "Viewing a .bic file",
-        "view": ("Browsers cannot open <code>.bic</code> files yet. Download the "
-                 "<a href=\"https://github.com/proteo5/bic/releases\">bic-view</a> program for "
-                 "Windows, Linux or macOS, or convert the file back to PNG with "
-                 "<code>bic decode file.bic file.png</code>. A browser extension or a Service "
-                 "Worker that shows <code>.bic</code> in <code>&lt;img&gt;</code> is a possible "
-                 "next step."),
-        "h_method": "How the numbers are produced",
-        "method": [
-            "BIC: <code>bic encode</code> with default settings (lossless, Zstandard level 19). "
-            "Each file is checked with <code>bic verify</code>, which requires the decoded pixels "
-            "to match the source exactly.",
-            "PNG: the <code>image</code> crate's default encoder. oxipng: preset 2. "
-            "WebP lossless: the <code>image</code> crate's encoder.",
-            "Lossy formats: Pillow {pillow}. WebP quality 80, method 6. AVIF quality 50. "
-            "JPEG quality 85, transparency flattened onto white.",
-            "Photographs are stored as JPEG (quality 90) sources. Their BIC file keeps that JPEG.",
-            "BIC stores an ICC color profile when the source has one. On small images this adds "
-            "a few hundred bytes.",
-            "Source images are the files listed below, resized to at most 1600 pixels per side "
-            "when larger. The same pixels go to every format.",
-        ],
-        "h_sources": "Sources and licenses",
-        "by": "by",
-        "unknown": "unknown",
-        "resized": "Resized to fit 1600 px.",
-        "footer": ("Generated by <code>site/build.py</code> from the "
-                   "<a href=\"https://github.com/proteo5/bic\">BIC repository</a>. The images are "
-                   "republished under their original licenses, with the changes stated above."),
+        "lossy_photo_note": "Lossless formats are far larger for photographs.",
+        "na": "n/a",
+        "use_title": "When to use BIC",
+        "use_lead": "The measurements decide the cases. Flat graphics with few colors are where BIC is smaller than optimized PNG. Everything else in the table is not.",
+        "use_do_title": "Use BIC for", "use_do": ["Charts, diagrams and graphs with solid areas", "Logos and brand marks", "Icons and pixel art with few colors", "Any image that must stay lossless and is smaller in BIC"],
+        "use_dont_title": "Do not use BIC for", "use_dont": ["Photographs: store them as JPEG or WebP", "Software screenshots with anti-aliased text: they have thousands of colors and BIC is larger", "Images that may be lossy: WebP or AVIF are much smaller"],
+        "use_rule": "The build step converts an image only when BIC is at least 10% smaller than the best lossless format, and never for JPEG or for images with more than 4096 colors.",
+        "integrate_title": "Use it in your project",
+        "integrate_lead": "The decoder works wherever JavaScript runs. The build step converts your images and serves them through a Service Worker, under their original URLs, so your HTML and CSS do not change.",
+        "more_docs": "Full reference in the documentation →",
+        "how_title": "How it works",
+        "how": ["Images are encoded in planes, with palettes or color transforms, predictors and run-length blocks, then compressed with Zstandard.",
+                "The encoder tries a small set of candidates and keeps the smallest. The result decodes to exactly the same pixels.",
+                "With the build step, a Service Worker answers requests for converted images. Without it, the browser downloads the PNG as usual.",
+                "The decoded image is kept in the browser's cache, so each .bic is downloaded once per device."],
+        "verify_title": "How it is checked",
+        "verify": ["53 cases made by the Rust encoder: each decodes in the JavaScript runtime to the Rust decoder's exact pixels.",
+                   "Malformed and randomly corrupted files throw an error, never a crash.",
+                   "End-to-end tests in Chrome with Vite and webpack: the first visit downloads the PNG; later visits show the .bic with identical pixels.",
+                   "Not tested yet: Firefox and Safari."],
+        "downloads_title": "Downloads",
+        "downloads_lead": "The command-line tool and the viewer for Windows, Linux and macOS, from release v{version}. The build step installs the right binary by itself.",
+        "download_items": [("Windows x64", "bic-v{version}-x86_64-pc-windows-msvc.zip"), ("Linux x64", "bic-v{version}-x86_64-unknown-linux-gnu.tar.gz"),
+                           ("macOS Apple Silicon", "bic-v{version}-aarch64-apple-darwin.tar.gz"), ("macOS Intel", "bic-v{version}-x86_64-apple-darwin.tar.gz")],
+        "download_link": "Download", "download_all": "All releases and checksums",
+        "sources_title": "Example images and licenses",
+        "sources_lead": "Each example is republished under its license, from Wikimedia Commons. Images larger than 1600 px were resized, as noted.",
+        "by": "by", "unknown": "unknown", "resized": "Resized to fit 1600 px.",
+        "footer": "Built from the BIC repository. Decoder used on this site: @proteo5/bic-runtime {runtime}.",
+        "footer_source": "Source", "footer_license": "Apache-2.0",
+        "ui": {"themeDark": "Switch to dark theme", "themeLight": "Switch to light theme", "decodedIn": "Decoded in {ms} ms",
+               "storedAs": "Stored as {mime}, shown as is", "identical": "identical to the source",
+               "mismatch": "does not match the source", "failed": "Could not load", "notBic": "Not a valid .bic file",
+               "dropDone": "Decoded. The decoder checks the pixels itself.", "downloadPng": "Download as PNG"},
     },
     "es": {
-        "lang_code": "es",
-        "switch_href": "../",
-        "switch_label": "English",
-        "title": "BIC: cuándo hace los archivos más pequeños y cuándo no",
-        "h1": "BIC: cuándo hace los archivos más pequeños y cuándo no",
-        "lead": ("BIC es un formato de imagen sin pérdida. En algunos gráficos planos ocupa menos "
-                 "que un PNG optimizado, y en otros ocupa más. Los formatos con pérdida como WebP y "
-                 "AVIF suelen ser mucho más pequeños, pero cambian los valores de los píxeles. Los "
-                 "resultados de abajo se midieron en cada ejemplo, incluidos los casos en que BIC pierde."),
-        "note_win": "Donde BIC fue más pequeño que un PNG optimizado:",
-        "note_win_text": "una gráfica de barras y un ícono con pocos colores.",
-        "note_lose": "Donde fue más grande:",
-        "note_lose_text": ("una interfaz de software con texto suavizado, pixel art y un diagrama de "
-                           "flujo. Las capturas reales tienen muchos colores, y el modo de paleta de "
-                           "BIC no se aplica a ellas."),
-        "note_photo": "Fotografías:",
-        "note_photo_text": "BIC guarda el JPEG sin cambios y agrega 32 bytes. Usa JPEG, WebP o AVIF.",
-        "h_results": "Resultados",
-        "results_intro": ("Todos los tamaños están en KiB. &ldquo;Mejor sin pérdida&rdquo; es el más "
-                          "pequeño de PNG, oxipng y WebP sin pérdida. Las últimas tres columnas son "
-                          "formatos con pérdida, que conservan menos valores de píxel exactos. &ldquo;MB "
-                          "ahorrados por cada 1,000 vistas&rdquo; multiplica la diferencia por 1,000 "
-                          "transferencias de la misma imagen. Los valores negativos significan que BIC "
-                          "es más grande."),
-        "th": ["Ejemplo", "Píxeles", "PNG", "oxipng", "WebP sin pérdida", "Archivo BIC",
-               "Mejor sin pérdida", "BIC más pequeño por", "MB ahorrados por cada 1,000 vistas",
-               "WebP q80", "AVIF q50", "JPEG q85", "Qué usar"],
-        "kind": {"flat": "gráficos planos", "photo": "fotografía"},
-        "na": "n/d",
-        "lossy_photo_note": ("BIC conserva el JPEG original (calidad 90) tal cual. Los formatos sin "
-                             "pérdida son mucho más grandes para fotografías."),
+        "lang": "es",
+        "title": "BIC: un formato de imagen sin pérdida para gráficas, logotipos e íconos",
+        "description": "BIC es un formato de imagen sin pérdida: ocupa menos que un PNG optimizado en algunos gráficos planos; las fotografías se quedan en JPEG. Se decodifica en el navegador con una librería de 5.7 KiB.",
+        "nav_home": "Inicio", "nav_docs": "Documentación", "nav_results": "Resultados", "nav_live": "Ejemplos en vivo",
+        "lang_switch": "English", "lang_href": "../", "lang_hreflang": "en",
+        "theme_dark": "Cambiar al tema oscuro", "theme_light": "Cambiar al tema claro",
+        "eyebrow": "Sin pérdida · código abierto · Apache-2.0",
+        "h1": "Un formato de imagen sin pérdida para gráficas, logotipos e íconos",
+        "lead": "BIC guarda los gráficos planos en menos bytes que un PNG optimizado. Las fotografías se conservan como su JPEG original. El decodificador corre en el navegador, y puedes probarlo abajo con archivos reales.",
+        "cta_docs": "Leer la documentación", "cta_github": "Ver en GitHub", "cta_npm": "Paquete en npm",
+        "install_runtime": "Decodificador para navegador y Node.js", "install_build": "Paso de build para Vite y webpack",
+        "copy": "Copiar", "copied": "Copiado",
+        "stats": [("{decoder} KiB", "decodificador, gzip, una sola dependencia (fzstd)"),
+                  ("{fixtures}", "casos verificados contra el decodificador de Rust"),
+                  ("{best}%", "más pequeño que el mejor formato sin pérdida, mejor caso")],
+        "live_title": "En vivo: archivos .bic reales, decodificados en tu navegador",
+        "live_lead": "Cada archivo de abajo lo decodifica ahora @proteo5/bic-runtime desde npm, sin servidor de por medio. El resultado se compara con los píxeles originales, byte por byte.",
+        "drop_title": "Prueba tu propio archivo .bic",
+        "drop_text": "Arrastra un archivo .bic aquí, o elígelo. Se decodifica en tu navegador; no se sube nada.",
+        "drop_choose": "Elegir archivo", "drop_png": "Descargar como PNG",
+        "example_png": "PNG original", "example_bic": "archivo .bic",
+        "results_title": "Resultados",
+        "results_lead": "Medido en las imágenes de ejemplo. Tamaños en KiB. \"Mejor sin pérdida\" es el más pequeño de PNG, oxipng y WebP sin pérdida. Las últimas tres columnas son formatos con pérdida, que cambian los valores de los píxeles. \"MB ahorrados por cada 1,000 vistas\" multiplica la diferencia por 1,000 transferencias. Los valores negativos significan que BIC es más grande.",
+        "th": ["Ejemplo", "Píxeles", "PNG", "oxipng", "WebP sin pérdida", "Archivo BIC", "Mejor sin pérdida", "BIC más pequeño por", "MB ahorrados / 1,000 vistas", "WebP q80", "AVIF q50", "JPEG q85", "Veredicto"],
+        "pill_good": "Usa BIC", "pill_bad": "Mantén el PNG", "pill_jpeg": "Mantén el JPEG",
+        "verdict_good": "{pct}% más pequeño que {best}.", "verdict_bad": "{best} es más pequeño. Mantenlo.",
+        "verdict_photo": "El JPEG original se guarda tal cual, así que BIC no aporta nada aquí.",
         "lossy_note": "{fmt} con pérdida es {pct}% más pequeño que BIC, si no se necesitan píxeles exactos.",
-        "verdict_photo": "Guarda el JPEG original, así que BIC no aporta nada: usa JPEG, WebP o AVIF para fotografías.",
-        "verdict_good": "Buena opción: {pct}% más pequeño que {best}.",
-        "verdict_bad": "No es buena opción: {best} es más pequeño. Usa ese.",
-        "h_bandwidth": "Cómo se calcula el ancho de banda",
-        "bandwidth": ("Los archivos de imagen ya están comprimidos, así que el servidor no los reduce más. "
-                      "Los bytes ahorrados en cada transferencia son, por tanto, la diferencia de tamaño. "
-                      "Multiplícala por el número de vistas para obtener el total. Un ahorro de 20&nbsp;% en "
-                      "una captura de 150&nbsp;KiB son unos 30&nbsp;KiB por vista: importa en un sitio con "
-                      "mucho tráfico y poco en una sola página."),
-        "h_view": "Ver un archivo .bic",
-        "view": ("Los navegadores todavía no abren archivos <code>.bic</code>. Descarga el programa "
-                 "<a href=\"https://github.com/proteo5/bic/releases\">bic-view</a> para Windows, Linux o "
-                 "macOS, o convierte el archivo a PNG con <code>bic decode archivo.bic archivo.png</code>. "
-                 "Una extensión del navegador o un Service Worker que muestre <code>.bic</code> en "
-                 "<code>&lt;img&gt;</code> es el siguiente paso posible."),
-        "h_method": "Cómo se obtienen los números",
-        "method": [
-            "BIC: <code>bic encode</code> con la configuración predeterminada (sin pérdida, Zstandard "
-            "nivel 19). Cada archivo se verifica con <code>bic verify</code>, que exige que los píxeles "
-            "decodificados coincidan exactamente con el original.",
-            "PNG: el codificador predeterminado del crate <code>image</code>. oxipng: preset 2. WebP sin "
-            "pérdida: el codificador del crate <code>image</code>.",
-            "Formatos con pérdida: Pillow {pillow}. WebP calidad 80, método 6. AVIF calidad 50. JPEG "
-            "calidad 85, con la transparencia aplanada sobre blanco.",
-            "Las fotografías se guardan como fuentes JPEG (calidad 90). Su archivo BIC conserva ese JPEG.",
-            "BIC guarda un perfil de color ICC cuando la fuente lo tiene. En imágenes pequeñas esto suma "
-            "unos cientos de bytes.",
-            "Las imágenes fuente son los archivos listados abajo, reducidos a 1600 píxeles por lado como "
-            "máximo cuando eran más grandes. Los mismos píxeles se usan en todos los formatos.",
-        ],
-        "h_sources": "Fuentes y licencias",
-        "by": "por",
-        "unknown": "desconocido",
-        "resized": "Reducida para caber en 1600 px.",
-        "footer": ("Generado por <code>site/build.py</code> desde el "
-                   "<a href=\"https://github.com/proteo5/bic\">repositorio de BIC</a>. Las imágenes se "
-                   "republican bajo sus licencias originales, con los cambios indicados arriba."),
+        "lossy_photo_note": "Los formatos sin pérdida son mucho más grandes para fotografías.",
+        "na": "n/d",
+        "use_title": "Cuándo usar BIC",
+        "use_lead": "Las mediciones deciden los casos. Los gráficos planos con pocos colores son donde BIC ocupa menos que un PNG optimizado. Lo demás de la tabla no.",
+        "use_do_title": "Usa BIC para", "use_do": ["Gráficas, diagramas y esquemas con áreas sólidas", "Logotipos y marcas", "Íconos y pixel art con pocos colores", "Cualquier imagen que deba seguir sin pérdida y sea más pequeña en BIC"],
+        "use_dont_title": "No uses BIC para", "use_dont": ["Fotografías: guárdalas como JPEG o WebP", "Capturas de software con texto suavizado: tienen miles de colores y BIC es más grande", "Imágenes que pueden ser con pérdida: WebP o AVIF son mucho más pequeños"],
+        "use_rule": "El paso de build convierte una imagen solo cuando BIC es al menos 10% más pequeño que el mejor formato sin pérdida, y nunca para JPEG ni para imágenes con más de 4096 colores.",
+        "integrate_title": "Úsalo en tu proyecto",
+        "integrate_lead": "El decodificador funciona donde corre JavaScript. El paso de build convierte tus imágenes y las sirve con un Service Worker, bajo sus URL originales, así que tu HTML y tu CSS no cambian.",
+        "more_docs": "Referencia completa en la documentación →",
+        "how_title": "Cómo funciona",
+        "how": ["Las imágenes se codifican por planos, con paletas o transformadas de color, predictores y bloques de longitud de series, y luego se comprimen con Zstandard.",
+                "El codificador prueba un conjunto pequeño de candidatos y se queda con el más pequeño. El resultado se decodifica a exactamente los mismos píxeles.",
+                "Con el paso de build, un Service Worker responde las peticiones de las imágenes convertidas. Sin él, el navegador descarga el PNG de siempre.",
+                "La imagen decodificada queda en la caché del navegador, así que cada .bic se descarga una vez por dispositivo."],
+        "verify_title": "Cómo se verifica",
+        "verify": ["53 casos hechos con el codificador de Rust: cada uno se decodifica en el runtime de JavaScript a los píxeles exactos del decodificador de Rust.",
+                   "Los archivos mal formados o dañados al azar producen un error, nunca un fallo.",
+                   "Pruebas de extremo a extremo en Chrome con Vite y webpack: la primera visita descarga el PNG; las siguientes muestran el .bic con píxeles idénticos.",
+                   "Sin probar todavía: Firefox y Safari."],
+        "downloads_title": "Descargas",
+        "downloads_lead": "La herramienta de línea de comandos y el visor para Windows, Linux y macOS, del release v{version}. El paso de build instala el binario correcto por sí solo.",
+        "download_items": [("Windows x64", "bic-v{version}-x86_64-pc-windows-msvc.zip"), ("Linux x64", "bic-v{version}-x86_64-unknown-linux-gnu.tar.gz"),
+                           ("macOS Apple Silicon", "bic-v{version}-aarch64-apple-darwin.tar.gz"), ("macOS Intel", "bic-v{version}-x86_64-apple-darwin.tar.gz")],
+        "download_link": "Descargar", "download_all": "Todos los releases y sumas de verificación",
+        "sources_title": "Imágenes de ejemplo y licencias",
+        "sources_lead": "Cada ejemplo se republica bajo su licencia, desde Wikimedia Commons. Las imágenes de más de 1600 px se redujeron, como se indica.",
+        "by": "por", "unknown": "desconocido", "resized": "Reducida para caber en 1600 px.",
+        "footer": "Sitio construido desde el repositorio de BIC. Decodificador usado en este sitio: @proteo5/bic-runtime {runtime}.",
+        "footer_source": "Código fuente", "footer_license": "Apache-2.0",
+        "ui": {"themeDark": "Cambiar al tema oscuro", "themeLight": "Cambiar al tema claro", "decodedIn": "Decodificado en {ms} ms",
+               "storedAs": "Guardado como {mime}, se muestra tal cual", "identical": "idéntico al original",
+               "mismatch": "no coincide con el original", "failed": "No se pudo cargar", "notBic": "No es un archivo .bic válido",
+               "dropDone": "Decodificado. El decodificador verifica los píxeles por sí mismo.", "downloadPng": "Descargar como PNG"},
     },
 }
 
 
-def verdict(row, s):
-    if row["kept_original"]:
-        return s["verdict_photo"]
-    if row["saving_vs_best_lossless"] > 0:
-        return s["verdict_good"].format(pct=f"{row['saving_vs_best_lossless']:.0f}",
-                                        best=row["best_lossless"])
-    return s["verdict_bad"].format(best=row["best_lossless"])
+# ---- Page layout ----------------------------------------------------------
 
 
-def description_for(row, lang):
-    return row["description"] if lang == "en" else DESCRIPTIONS_ES[row["id"]]
+def root_of(lang):
+    """Folder of a language's site, relative to the site root."""
+    return "" if lang == "en" else "es/"
 
 
-def render_table(rows, s, lang):
-    head = "".join(f"<th>{h}</th>" for h in s["th"])
-    up = "" if lang == "en" else "../"  # Spanish page lives one level down
-    body = []
-    for r in rows:
-        file_name = html.escape(r["file"])
-        stem = html.escape(os.path.splitext(r["file"])[0])
-        lossy_note = ""
-        if r["kept_original"]:
-            lossy_note = f"<br><small>{s['lossy_photo_note']}</small>"
-        elif r["lossy_smaller_than_bic"]:
-            note = s["lossy_note"].format(fmt=html.escape(r["best_lossy"]),
-                                          pct=f"{r['lossy_saving']:.0f}")
-            lossy_note = f"<br><small>{note}</small>"
-        saving = (s["na"] if r["saving_vs_best_lossless"] is None
-                  else f"{r['saving_vs_best_lossless']:+.0f}%")
-        per_views = (s["na"] if r["mb_per_1000_views"] is None
-                     else f"{r['mb_per_1000_views']:+.2f}")
-        body.append(
-            "<tr>"
-            f"<td><a href='{up}img/{file_name}'><img class='thumb' src='{up}img/{file_name}' alt=''></a>"
-            f"{html.escape(description_for(r, lang))}<br><small>{s['kind'][r['kind']]}</small></td>"
-            f"<td>{r['width']}×{r['height']}</td>"
-            f"<td>{kib(r['lossless']['PNG'])}</td>"
-            f"<td>{kib(r['lossless']['oxipng'])}</td>"
-            f"<td>{kib(r['lossless']['WebP lossless'])}</td>"
-            f"<td><strong>{kib(r['bic_bytes'])}</strong>"
-            f"<br><small><a href='{up}bic/{stem}.bic'>.bic</a></small></td>"
-            f"<td>{html.escape(r['best_lossless'])}: {kib(r['lossless'][r['best_lossless']])}</td>"
-            f"<td>{saving}</td>"
-            f"<td>{per_views}</td>"
-            f"<td>{kib(r['lossy']['WebP q80'])}</td>"
-            f"<td>{kib(r['lossy']['AVIF q50'])}</td>"
-            f"<td>{kib(r['lossy']['JPEG q85'])}</td>"
-            f"<td>{verdict(r, s)}{lossy_note}</td>"
-            "</tr>"
-        )
-    return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+def page_dir(page):
+    """Folder of a page inside its language, relative to the language root."""
+    return "" if page == "home" else "docs/"
 
 
-def render_attribution(rows, s, lang):
-    items = []
-    for r in rows:
-        license_link = (f"<a href='{html.escape(r['license_url'])}'>{html.escape(r['license'])}</a>"
-                        if r["license_url"] else html.escape(r["license"]))
-        resized = " " + s["resized"] if r["resized"] else ""
-        items.append(
-            f"<li>{html.escape(description_for(r, lang))}: "
-            f"<a href='{html.escape(r['page_url'])}'>{html.escape(r['source_file'])}</a>, "
-            f"{s['by']} {html.escape(r['author'] or s['unknown'])}, {license_link}.{resized}</li>"
-        )
-    return "<ul>" + "".join(items) + "</ul>"
+def prefix_for(lang, page):
+    """Relative path from a page back to the site root ('', '../', '../../'...)."""
+    here = root_of(lang) + page_dir(page)
+    return posixpath.relpath(".", here or ".") + "/" if here else ""
 
 
-PAGE = """<!doctype html>
-<html lang="{lang_code}">
+def href(lang, page, from_lang, from_page):
+    """Relative link from one page to another page (in any language)."""
+    here = root_of(from_lang) + page_dir(from_page)
+    there = root_of(lang) + page_dir(page)
+    rel = posixpath.relpath(there or ".", here or ".")
+    return rel if rel.endswith("/") else rel + "/"
+
+
+def page_shell(lang, page, title, description, body, data_json, runtime_version):
+    """Common frame: header with navigation, theme and language switch, footer, scripts."""
+    t = HOME[lang]
+    other = "es" if lang == "en" else "en"
+    prefix = prefix_for(lang, page)
+    nav_items = [(href(lang, "home", lang, page), t["nav_home"], "home")]
+    if page == "home":
+        nav_items += [("#live", t["nav_live"], ""), ("#results", t["nav_results"], "")]
+    nav_items.append((href(lang, "docs", lang, page), t["nav_docs"], "docs"))
+    nav = "".join(
+        f'<a href="{link}"' + (' aria-current="page"' if key == page else "") + f">{label}</a>"
+        for link, label, key in nav_items
+    )
+    switch = href(other, page, lang, page)
+    home_link = href(lang, "home", lang, page)
+    return f"""<!doctype html>
+<html lang="{t['lang']}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
-<style>
-  :root {{ color-scheme: light dark; --muted: #6b7280; --line: #d1d5db; }}
-  body {{ font: 16px/1.5 system-ui, sans-serif; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }}
-  nav {{ text-align: right; }}
-  h1 {{ margin-bottom: .25rem; }}
-  .lead {{ color: var(--muted); margin-top: 0; }}
-  .wrap {{ overflow-x: auto; }}
-  table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 14px; }}
-  th, td {{ border: 1px solid var(--line); padding: .4rem .5rem; vertical-align: top; text-align: right; }}
-  th {{ background: rgba(127,127,127,.12); }}
-  td:first-child, td:last-child, th:first-child, th:last-child {{ text-align: left; }}
-  .thumb {{ max-width: 140px; max-height: 90px; display: block; margin-bottom: .25rem; }}
-  .note {{ border-left: 4px solid #2563eb; padding: .25rem 1rem; margin: 1.5rem 0; background: rgba(37,99,235,.06); }}
-  small {{ color: var(--muted); }}
-  code {{ font-size: 90%; }}
-</style>
+<title>{html.escape(title)}</title>
+<meta name="description" content="{html.escape(description)}">
+<meta property="og:title" content="{html.escape(title)}">
+<meta property="og:description" content="{html.escape(description)}">
+<meta name="color-scheme" content="light dark">
+<script>
+(function () {{
+  try {{
+    var saved = localStorage.getItem('bic-theme');
+    if (saved === 'dark' || saved === 'light') document.documentElement.dataset.theme = saved;
+  }} catch (e) {{}}
+}})();
+</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-size='17' text-anchor='middle' fill='white' font-family='Arial' font-weight='700'%3EB%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="{prefix}assets/style.css">
+<link rel="alternate" hreflang="{HOME[other]['lang']}" href="{switch}">
 </head>
 <body>
-<nav><a href="{switch_href}" hreflang="{switch_other}">{switch_label}</a></nav>
-<h1>{h1}</h1>
-<p class="lead">{lead}</p>
-
-<div class="note">
-<strong>{note_win}</strong> {note_win_text}<br>
-<strong>{note_lose}</strong> {note_lose_text}<br>
-<strong>{note_photo}</strong> {note_photo_text}
-</div>
-
-<h2>{h_results}</h2>
-<p>{results_intro}</p>
-<div class="wrap">{table}</div>
-
-<h2>{h_bandwidth}</h2>
-<p>{bandwidth}</p>
-
-<h2>{h_view}</h2>
-<p>{view}</p>
-
-<h2>{h_method}</h2>
-<ul>
-{method}
-</ul>
-
-<h2>{h_sources}</h2>
-{attribution}
-
-<p><small>{footer}</small></p>
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href="{home_link}"><span class="brand-mark">B</span>BIC</a>
+    <nav class="nav" aria-label="Main">{nav}</nav>
+    <div class="header-actions">
+      <a class="lang-switch" href="{switch}" hreflang="{HOME[other]['lang']}">{t['lang_switch']}</a>
+      <button id="theme-toggle" class="icon-button" type="button" aria-label="{t['theme_dark']}" title="{t['theme_dark']}">
+        <svg class="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path class="moon" d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+          <g class="sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main>
+{body}
+</main>
+<footer>
+  <div class="container">
+    <span>{t['footer'].format(runtime=runtime_version)}</span>
+    <span><a href="{REPO}">{t['footer_source']}</a> · {t['footer_license']}</span>
+  </div>
+</footer>
+<script type="application/json" id="bic-data">{data_json}</script>
+<script src="{prefix}assets/app.js" defer></script>
 </body>
 </html>
 """
 
 
-def render_page(rows, lang, pillow_version):
-    s = STRINGS[lang]
-    other = "es" if lang == "en" else "en"
-    return PAGE.format(
-        lang_code=s["lang_code"],
-        title=s["title"],
-        switch_href=s["switch_href"],
-        switch_label=s["switch_label"],
-        switch_other=other,
-        h1=s["h1"],
-        lead=s["lead"],
-        note_win=s["note_win"],
-        note_win_text=s["note_win_text"],
-        note_lose=s["note_lose"],
-        note_lose_text=s["note_lose_text"],
-        note_photo=s["note_photo"],
-        note_photo_text=s["note_photo_text"],
-        h_results=s["h_results"],
-        results_intro=s["results_intro"],
-        table=render_table(rows, s, lang),
-        h_bandwidth=s["h_bandwidth"],
-        bandwidth=s["bandwidth"],
-        h_view=s["h_view"],
-        view=s["view"],
-        h_method=s["h_method"],
-        method="\n".join(f"<li>{m.format(pillow=pillow_version)}</li>" for m in s["method"]),
-        h_sources=s["h_sources"],
-        attribution=render_attribution(rows, s, lang),
-        footer=s["footer"],
+def page_data(rows, prefix, t, runtime_version):
+    """The JSON the page script reads: translated UI strings and the examples."""
+    payload = {
+        "runtimeVersion": runtime_version,
+        "ui": t["ui"],
+        "examples": [
+            {"id": r["stem"], "bic": f"{prefix}bic/{r['stem']}.bic", "sha256": r["sha256"], "kind": r["kind"]}
+            for r in rows
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False).replace("<", "\\u003c")
+
+
+def render_home(rows, lang, runtime_version, stats):
+    t = HOME[lang]
+    prefix = prefix_for(lang, "home")
+    stat_html = "".join(
+        f'<div class="stat"><strong>{value}</strong><span>{label}</span></div>' for value, label in stats
+    )
+    example_cards = []
+    for r in rows:
+        stem = html.escape(r["stem"])
+        file_name = html.escape(r["file"])
+        example_cards.append(f"""
+        <article class="card example" data-example="{stem}">
+          <div class="example-head">
+            <h3>{html.escape(example_title(r, lang))}</h3>
+            <small>{r['width']} × {r['height']}</small>
+          </div>
+          <div class="view" aria-live="polite"><span class="meta">…</span></div>
+          <p class="status" data-state="">&nbsp;</p>
+          <div class="example-links">
+            <a href="{prefix}img/{file_name}">{t['example_png']}</a>
+            <a href="{prefix}bic/{stem}.bic">{t['example_bic']}</a>
+          </div>
+        </article>""")
+
+    head = "".join(f"<th>{h}</th>" for h in t["th"])
+    body_rows = []
+    for r in rows:
+        saving = t["na"] if r["saving_vs_best_lossless"] is None else f"{r['saving_vs_best_lossless']:+.0f}%"
+        per_views = t["na"] if r["mb_per_1000_views"] is None else f"{r['mb_per_1000_views']:+.2f}"
+        if r["kept_original"]:
+            verdict = f'<span class="pill neutral">{t["pill_jpeg"]}</span> {t["verdict_photo"]}<br><small>{t["lossy_photo_note"]}</small>'
+        elif r["saving_vs_best_lossless"] > 0:
+            text = t["verdict_good"].format(pct=f"{r['saving_vs_best_lossless']:.0f}", best=r["best_lossless"])
+            verdict = f'<span class="pill good">{t["pill_good"]}</span> {html.escape(text)}'
+        else:
+            text = t["verdict_bad"].format(best=r["best_lossless"])
+            verdict = f'<span class="pill bad">{t["pill_bad"]}</span> {html.escape(text)}'
+        if not r["kept_original"] and r["lossy_smaller_than_bic"]:
+            note = t["lossy_note"].format(fmt=html.escape(r["best_lossy"]), pct=f"{r['lossy_saving']:.0f}")
+            verdict += f"<br><small>{html.escape(note)}</small>"
+        body_rows.append(
+            "<tr>"
+            f'<td><img class="thumb" src="{prefix}img/{html.escape(r["file"])}" alt="" loading="lazy">'
+            f'{html.escape(example_title(r, lang))}</td>'
+            f"<td>{r['width']}×{r['height']}</td>"
+            f"<td>{kib(r['lossless']['PNG'])}</td>"
+            f"<td>{kib(r['lossless']['oxipng'])}</td>"
+            f"<td>{kib(r['lossless']['WebP lossless'])}</td>"
+            f"<td><strong>{kib(r['bic_bytes'])}</strong></td>"
+            f"<td>{html.escape(r['best_lossless'])}: {kib(r['lossless'][r['best_lossless']])}</td>"
+            f"<td>{saving}</td><td>{per_views}</td>"
+            f"<td>{kib(r['lossy']['WebP q80'])}</td>"
+            f"<td>{kib(r['lossy']['AVIF q50'])}</td>"
+            f"<td>{kib(r['lossy']['JPEG q85'])}</td>"
+            f"<td>{verdict}</td>"
+            "</tr>"
+        )
+    table = (f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead>'
+             f'<tbody>{"".join(body_rows)}</tbody></table></div>')
+
+    attribution = "".join(
+        f"<li>{html.escape(example_title(r, lang))}: "
+        f'<a href="{html.escape(r["page_url"])}">{html.escape(r["source_file"])}</a>, '
+        f'{t["by"]} {html.escape(r["author"] or t["unknown"])}, '
+        + (f'<a href="{html.escape(r["license_url"])}">{html.escape(r["license"])}</a>' if r["license_url"]
+           else html.escape(r["license"]))
+        + "." + (f" {t['resized']}" if r["resized"] else "") + "</li>"
+        for r in rows
+    )
+
+    downloads = "".join(
+        f'<div class="card download"><strong>{label}</strong><span>{pattern.format(version=VERSION)}</span>'
+        f'<a href="{REPO}/releases/download/v{VERSION}/{pattern.format(version=VERSION)}">{t["download_link"]}</a></div>'
+        for label, pattern in t["download_items"]
+    )
+
+    body = f"""
+<section class="hero">
+  <div class="container">
+    <p class="eyebrow">{t['eyebrow']}</p>
+    <h1>{t['h1']}</h1>
+    <p class="lead">{t['lead']}</p>
+    <div class="cta">
+      <a class="button primary" href="{prefix}docs/">{t['cta_docs']}</a>
+      <a class="button" href="{REPO}">{t['cta_github']}</a>
+      <a class="button" href="https://www.npmjs.com/package/@proteo5/bic-runtime">{t['cta_npm']}</a>
+    </div>
+    <div class="install">
+      <div>
+        <small class="meta">{t['install_runtime']}</small>
+        <div class="install-row"><code>npm install @proteo5/bic-runtime</code>
+          <button class="copy" type="button" data-copy-text="npm install @proteo5/bic-runtime">{t['copy']}</button></div>
+      </div>
+      <div>
+        <small class="meta">{t['install_build']}</small>
+        <div class="install-row"><code>npm install --save-dev @proteo5/bic-build</code>
+          <button class="copy" type="button" data-copy-text="npm install --save-dev @proteo5/bic-build">{t['copy']}</button></div>
+      </div>
+    </div>
+    <div class="hero-stats">{stat_html}</div>
+  </div>
+</section>
+
+<section id="live">
+  <div class="container">
+    <h2>{t['live_title']}</h2>
+    <p class="section-lead">{t['live_lead']}</p>
+    <div class="grid cols-3">{''.join(example_cards)}</div>
+    <h3 style="margin-top:2.5rem">{t['drop_title']}</h3>
+    <div class="drop" id="drop">
+      <p>{t['drop_text']}</p>
+      <label class="button primary">
+        <input id="drop-input" type="file" accept=".bic" hidden>
+        {t['drop_choose']}
+      </label>
+    </div>
+    <div id="drop-result" class="drop-result card" hidden></div>
+  </div>
+</section>
+
+<section id="results" class="alt">
+  <div class="container">
+    <h2>{t['results_title']}</h2>
+    <p class="section-lead">{t['results_lead']}</p>
+    {table}
+  </div>
+</section>
+
+<section id="use">
+  <div class="container">
+    <h2>{t['use_title']}</h2>
+    <p class="section-lead">{t['use_lead']}</p>
+    <div class="grid cols-2">
+      <div class="card two-col-do"><h3>{t['use_do_title']}</h3><ul class="check">{''.join(f'<li>{html.escape(x)}</li>' for x in t['use_do'])}</ul></div>
+      <div class="card two-col-dont"><h3>{t['use_dont_title']}</h3><ul class="cross">{''.join(f'<li>{html.escape(x)}</li>' for x in t['use_dont'])}</ul></div>
+    </div>
+    <div class="callout"><p>{t['use_rule']}</p></div>
+  </div>
+</section>
+
+<section id="integrate" class="alt">
+  <div class="container">
+    <h2>{t['integrate_title']}</h2>
+    <p class="section-lead">{t['integrate_lead']}</p>
+    <div class="grid cols-2">
+      <div class="card"><h3>{t['how_title']}</h3><ul class="check">{''.join(f'<li>{html.escape(x)}</li>' for x in t['how'])}</ul></div>
+      <div class="card"><h3>{t['verify_title']}</h3><ul class="check">{''.join(f'<li>{html.escape(x)}</li>' for x in t['verify'])}</ul></div>
+    </div>
+    <p style="margin-top:1.5rem"><a href="{prefix}docs/">{t['more_docs']}</a></p>
+  </div>
+</section>
+
+<section id="downloads">
+  <div class="container">
+    <h2>{t['downloads_title']}</h2>
+    <p class="section-lead">{t['downloads_lead'].format(version=VERSION)}</p>
+    <div class="downloads">{downloads}</div>
+    <p style="margin-top:1.25rem"><a href="{REPO}/releases">{t['download_all']}</a></p>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <h2>{t['sources_title']}</h2>
+    <p class="section-lead">{t['sources_lead']}</p>
+    <ul class="attribution">{attribution}</ul>
+  </div>
+</section>
+"""
+    return page_shell(
+        lang, "home", t["title"], t["description"], body,
+        page_data(rows, prefix, t, runtime_version), runtime_version,
     )
 
 
-def main():
-    import PIL
+# ---- Documentation pages --------------------------------------------------
 
+
+def render_docs(lang, runtime_version, rows):
+    docs = DOCS[lang]
+    t = HOME[lang]
+    prefix = prefix_for(lang, "docs")
+    toc = "".join(f'<li><a href="#{section["id"]}">{html.escape(section["title"])}</a></li>' for section in docs["sections"])
+    sections = "".join(
+        f'<section id="{section["id"]}"><h2>{html.escape(section["title"])}</h2>{section["body"]}</section>'
+        for section in docs["sections"]
+    )
+    body = f"""
+<section class="hero docs-hero">
+  <div class="container">
+    <p class="eyebrow">{docs['eyebrow']}</p>
+    <h1>{html.escape(docs['h1'])}</h1>
+    <p class="lead">{docs['lead']}</p>
+  </div>
+</section>
+<div class="container docs">
+  <aside class="toc card" aria-label="{html.escape(docs['toc_label'])}">
+    <strong>{html.escape(docs['toc_label'])}</strong>
+    <ol>{toc}</ol>
+  </aside>
+  <div class="docs-body">
+    {sections}
+  </div>
+</div>
+"""
+    return page_shell(
+        lang, "docs", docs["title"], docs["description"], body,
+        page_data(rows, prefix, t, runtime_version), runtime_version,
+    )
+
+
+# ---- Main -----------------------------------------------------------------
+
+VERSION = "0.2.1"
+
+
+def read_version():
+    with open(os.path.join(ROOT, "Cargo.toml"), encoding="utf-8") as f:
+        return next(line.split('"')[1] for line in f if line.startswith("version"))
+
+
+def main():
+    global VERSION
     manifest_path = os.path.join(SOURCES, "manifest.json")
     if not os.path.exists(manifest_path):
         sys.exit("run site/prepare_sources.py first")
     if not os.path.exists(BIC):
-        sys.exit(f"bic binary not found at {BIC}; run cargo build --release")
+        sys.exit(f"bic binary not found at {BIC}; run cargo build --release --bin bic")
+    if not os.path.exists(RUNTIME_PACKAGE):
+        sys.exit("run `npm ci` in site/ first")
+    VERSION = read_version()
     with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
+    with open(RUNTIME_PACKAGE, encoding="utf-8") as f:
+        runtime_version = json.load(f)["version"]
+    with open(FIXTURES, encoding="utf-8") as f:
+        fixtures = len(json.load(f))
+
+    shutil.rmtree(OUT, ignore_errors=True)
+    os.makedirs(os.path.join(OUT, "assets"))
     rows = build_rows(manifest)
 
-    os.makedirs(os.path.join(OUT, "es"), exist_ok=True)
-    with open(os.path.join(OUT, "index.html"), "w", encoding="utf-8") as f:
-        f.write(render_page(rows, "en", PIL.__version__))
-    with open(os.path.join(OUT, "es", "index.html"), "w", encoding="utf-8") as f:
-        f.write(render_page(rows, "es", PIL.__version__))
+    # The page script (with the published runtime) and the decoder's size.
+    run("node", os.path.join(APP, "bundle.mjs"), cwd=HERE)
+    shutil.copy(os.path.join(APP, "style.css"), os.path.join(OUT, "assets", "style.css"))
+    with open(os.path.join(OUT, "size.json"), encoding="utf-8") as f:
+        size = json.load(f)
+    best = max((r["saving_vs_best_lossless"] for r in rows if r["saving_vs_best_lossless"] is not None), default=0)
+
+    for lang in ("en", "es"):
+        t = HOME[lang]
+        stats = [
+            (t["stats"][0][0].format(decoder=f"{size['decoderGzipBytes'] / 1024:.1f}"), t["stats"][0][1]),
+            (t["stats"][1][0].format(fixtures=fixtures), t["stats"][1][1]),
+            (t["stats"][2][0].format(best=f"{best:.0f}"), t["stats"][2][1]),
+        ]
+        home_dir = os.path.join(OUT, root_of(lang))
+        docs_dir = os.path.join(home_dir, "docs")
+        os.makedirs(docs_dir, exist_ok=True)
+        with open(os.path.join(home_dir, "index.html"), "w", encoding="utf-8") as f:
+            f.write(render_home(rows, lang, runtime_version, stats))
+        with open(os.path.join(docs_dir, "index.html"), "w", encoding="utf-8") as f:
+            f.write(render_docs(lang, runtime_version, rows))
+
+    # Images and .bic files are shared by all pages; they live at the site root.
     with open(os.path.join(OUT, "results.json"), "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=1)
-    print(f"wrote {os.path.join(OUT, 'index.html')} and {os.path.join(OUT, 'es', 'index.html')}")
+    print(f"wrote the site to {OUT} (bic {VERSION}, @proteo5/bic-runtime {runtime_version})")
 
 
 if __name__ == "__main__":

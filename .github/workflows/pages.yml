@@ -1,11 +1,12 @@
 name: Demo page
 
-# Rebuilds the size comparison page from the example images and publishes it
-# to GitHub Pages. Every number on the page is measured during this build.
+# Builds the BIC site (demo page and documentation) and publishes it to GitHub
+# Pages. The page uses the published @proteo5/bic-runtime from npm; every
+# number on the site is measured during this build.
 on:
   push:
     branches: [main]
-    paths: ["site/**", "src/**", "Cargo.toml", "Cargo.lock", ".github/workflows/pages.yml"]
+    paths: ["site/**", "src/**", "packages/bic-runtime/test/fixtures/**", "Cargo.toml", "Cargo.lock", "README.md", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -31,7 +32,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pillow
-      - name: Build the page
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the site's dependencies (published @proteo5/bic-runtime)
+        working-directory: site
+        run: npm ci
+      - name: Build the site
         run: python site/build.py
       - uses: actions/upload-pages-artifact@v3
         with:
