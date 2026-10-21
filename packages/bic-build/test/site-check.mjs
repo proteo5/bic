@@ -44,11 +44,11 @@ const theme = await page.evaluate(() => document.documentElement.dataset.theme);
 await page.reload({ waitUntil: 'load' });
 const persisted = await page.evaluate(() => document.documentElement.dataset.theme);
 console.log(`\ntheme toggle: ${theme} -> after reload ${persisted}`);
-await page.screenshot({ path: join(process.cwd(), 'shot-dark.png'), fullPage: false });
+await page.screenshot({ path: join(tmpdir(), 'bic-site-shot-dark.png'), fullPage: false });
 await page.click('#theme-toggle');
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(800);
-await page.screenshot({ path: join(process.cwd(), 'shot-light.png'), fullPage: false });
+await page.screenshot({ path: join(tmpdir(), 'bic-site-shot-light.png'), fullPage: false });
 
 console.log(`\npage errors: ${errors.length ? errors.join(' | ') : 'none'}`);
 await context.close();
