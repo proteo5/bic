@@ -1,24 +1,83 @@
 # @proteo5/bic-build
 
-A build step that stores flat graphics (charts, logos, icons) as BIC when that
-saves bandwidth, and leaves everything else alone.
+Stores flat graphics (charts, logos, icons) as BIC when that saves bandwidth,
+and leaves everything else alone. The browser shows them through a Service
+Worker, under their original URLs.
+
+## Vite
+
+```js
+// vite.config.js
+import { bicVite } from '@proteo5/bic-build/vite';
+
+export default {
+  plugins: [bicVite()],
+};
+```
+
+`vite build` then:
+
+1. measures every image and keeps the BIC version of those that pass the policy below;
+2. emits `bic-sw.js`, a worker that answers requests for the converted images, and
+   `bic-loader.js`, which registers it. The loader is added to each HTML page;
+3. writes `bic-report.json` with the decision and its reason for every image.
+
+Nothing in your HTML, CSS or JavaScript changes. `<img src="chart.png">` and
+`background: url(chart.png)` keep their URLs. The worker answers them with the
+decoded BIC image. Without the worker, which is the first visit, the browser
+downloads the PNG as usual, so nobody downloads a file twice. After the first
+visit the worker stores the decoded image in the browser's cache, so the
+network is used once per image per browser.
+
+The plugin runs in `vite build` only. In `vite dev` images load as before.
+
+## Which images are converted
+
+An image is converted only if all of these hold:
+
+- it is not a JPEG (JPEG is lossy, and BIC keeps it as it is);
+- it has at most 4096 distinct colors (more colors means a photograph-like image);
+- the BIC file is at least 10 % smaller than the best lossless alternative (PNG, oxipng or WebP lossless).
+
+Measured on the project's demo images, only the bar chart passes. Interfaces,
+pixel art and flowcharts are larger in BIC than in oxipng, so they stay PNG.
+
+Thresholds: `bicVite({ policy: { minSaving: 0.2, maxDistinctColors: 2000 } })`.
+
+## Limits
+
+- The base path must be absolute (`/`, `/app/`). With a relative base the plugin
+  converts nothing and says so.
+- Images that Vite inlines as data URLs, and files copied from `public/`, are not converted.
+- Browsers need a secure context for Service Workers: HTTPS, or `localhost`.
+- Only images that the page requests from its own origin are served by the worker.
+- Images that a page loads from another origin are not converted.
+
+## Command line
 
 ```bash
 bic-build src/images dist/bic
 ```
 
-For each image it runs `bic inspect` and keeps the BIC file only if all of these hold:
+Writes the converted `.bic` files and `bic-manifest.json` to the output folder.
+Options: `--min-saving 10` (percent), `--max-colors 4096`, `--bic <path>`.
 
-- the source is not already a lossy format (JPEG files are never converted);
-- the image has at most 4096 distinct colors (more colors means a photograph-like image);
-- the BIC file is at least 10 % smaller than the best lossless alternative: PNG, oxipng or WebP lossless.
+## The bic binary
 
-The output folder gets the converted `.bic` files and `bic-manifest.json`, with
-the decision and its reason for every image. Thresholds can be changed with
-`--min-saving` (percent) and `--max-colors`, or in code with `optimizeDirectory`.
+The package needs the `bic` program. On install it downloads the binary for
+your platform from the BIC release with the same version number, checks it
+against the release's `SHA256SUMS.txt`, and keeps it in `vendor/`. Platforms:
+Windows x64, Linux x64, macOS arm64 and x64.
 
-The `bic` binary is found through `--bic <path>`, the `BIC_BIN` environment
-variable, or the `PATH`. Build it with `cargo build --release` in the BIC repository.
+- `BIC_SKIP_DOWNLOAD=1` skips the download (offline installs).
+- `BIC_BIN=/path/to/bic` uses your own binary.
+- Without either, `bic` on the PATH is used.
 
-Browsers cannot display `.bic` files yet. The runtime in `packages/bic-runtime`
-decodes them, and integrating it into pages is the next step of this package.
+The binary must be current: `bic inspect` is required, and releases before it
+was added do not have it.
+
+## Browser support
+
+Service Workers and `Cache` are supported by current Chrome, Edge, Firefox and
+Safari. The end-to-end test runs in Chrome only; see `test/browser.test.mjs`
+(set `BIC_CHROME`). Firefox and Safari are not tested yet.

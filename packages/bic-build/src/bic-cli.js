@@ -1,19 +1,30 @@
-// Runs the `bic` command-line tool. The binary is found through the BIC_BIN
-// environment variable, or as `bic` on the PATH.
+// Runs the `bic` command-line tool. The binary is looked up in this order:
+// the explicit option, the BIC_BIN environment variable, the copy installed
+// with this package, and finally `bic` on the PATH.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { vendoredBinary } from './install-binary.js';
 
 const run = promisify(execFile);
 const MAX_BUFFER = 64 << 20;
 
 export function bicBinary(override) {
-  return override || process.env.BIC_BIN || 'bic';
+  return override || process.env.BIC_BIN || vendoredBinary() || 'bic';
 }
 
 /** Measurements for one image, as `bic inspect --json` reports them. */
 export async function inspect(file, binary) {
-  const { stdout } = await run(binary, ['inspect', file, '--json'], { maxBuffer: MAX_BUFFER });
+  let stdout;
+  try {
+    ({ stdout } = await run(binary, ['inspect', file, '--json'], { maxBuffer: MAX_BUFFER }));
+  } catch (error) {
+    if (/unrecognized subcommand 'inspect'/.test(String(error.stderr))) {
+      throw new Error(`${binary} is older than the bic-build package: it has no "inspect" command. ` +
+        'Install a newer bic release, or set BIC_BIN to a current build.');
+    }
+    throw error;
+  }
   return JSON.parse(stdout);
 }
 

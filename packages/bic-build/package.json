@@ -1,6 +1,6 @@
 {
   "name": "@proteo5/bic-build",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "description": "Build step that stores flat graphics (charts, logos, icons) as BIC when that saves bandwidth",
   "license": "Apache-2.0",
   "repository": {
@@ -11,17 +11,30 @@
   "type": "module",
   "main": "./src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./vite": "./src/vite.js"
   },
   "bin": {
     "bic-build": "./bin/bic-build.js"
   },
-  "files": ["src", "bin"],
+  "files": [
+    "src",
+    "bin"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/policy.test.mjs test/build.test.mjs"
+    "postinstall": "node src/install-binary.js",
+    "test": "node --test test/policy.test.mjs test/install-binary.test.mjs test/build.test.mjs test/vite.test.mjs"
   },
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@proteo5/bic-runtime": "file:../bic-runtime",
+    "esbuild": "^0.25.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0",
+    "playwright-core": "^1.50.0"
+  }
 }

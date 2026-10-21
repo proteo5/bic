@@ -60,6 +60,8 @@ jobs:
         working-directory: packages/bic-build
         env:
           BIC_BIN: ${{ github.workspace }}/target/release/bic
+          # The tests use the binary built above; the installer test checks the download.
+          BIC_SKIP_DOWNLOAD: "1"
         run: npm ci && npm test
 
   fuzz:
