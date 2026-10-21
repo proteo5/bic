@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is 0.x, the file
 format and the API may change between minor versions.
 
+## [0.2.1] - 2026-10-21
+
+### Added
+
+- `bic inspect <image> [--json]`: sizes of PNG, oxipng, WebP lossless and BIC
+  for one image, for build tools.
+- `@proteo5/bic-build`, a build step and plugins that store flat graphics
+  (charts, logos, icons) as BIC and serve them in the browser through a Service
+  Worker, under their original URLs:
+  - `bic-build <input> <output>` command;
+  - a Vite plugin (`@proteo5/bic-build/vite`);
+  - a webpack 5 plugin (`@proteo5/bic-build/webpack`).
+  The conversion rule: at least 10 % smaller than the best lossless alternative,
+  never JPEG, never more than 4096 colors. Thresholds can be changed.
+- `@proteo5/bic-runtime`, the BIC decoder in JavaScript (5.7 KiB gzip with zstd).
+- The package downloads the bic release binary for its platform on install and
+  checks it against the release checksums.
+
 ## [0.2.0] - 2026-10-20
 
 The BIC2 format replaces BIC1, and BIC1 files can no longer be read. Re-encode

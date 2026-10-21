@@ -30,6 +30,25 @@ visit the worker stores the decoded image in the browser's cache, so the
 network is used once per image per browser.
 
 The plugin runs in `vite build` only. In `vite dev` images load as before.
+Vite 7 is the tested version.
+
+## webpack
+
+```js
+// webpack.config.mjs (or webpack.config.js in a project with "type": "module")
+import { BicWebpackPlugin } from '@proteo5/bic-build/webpack';
+
+module.exports = {
+  mode: 'production',
+  output: { publicPath: '/' },   // must be absolute; 'auto' converts nothing
+  plugins: [new BicWebpackPlugin()],
+};
+```
+
+It works the same way as the Vite plugin: a worker under the original URLs and
+a loader added to each HTML page (it needs `html-webpack-plugin` or another
+plugin that writes the HTML). The plugin runs in production builds; pass
+`enableInDevelopment: true` to run it in development too.
 
 ## Which images are converted
 

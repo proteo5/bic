@@ -1,6 +1,6 @@
 [package]
 name = "bic"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.88"
 description = "Experimental lossless image codec for screenshots, diagrams and other flat graphics; little or no gain on photographs"

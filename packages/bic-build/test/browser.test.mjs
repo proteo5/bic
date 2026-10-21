@@ -1,5 +1,5 @@
-// End to end in Chrome: build the fixture app, serve it, and check what the
-// browser actually downloads over three visits.
+// End to end in Chrome: build the fixture app with each bundler, serve it, and
+// check what the browser actually downloads over three visits.
 //
 //   visit 1: no worker yet      -> the PNG comes from the network
 //   visit 2: worker active      -> the .bic is fetched and decoded once
@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bicVite } from '../src/vite.js';
+import { buildWebpackApp } from './webpack-app/build.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..', '..');
@@ -43,14 +44,28 @@ function serve(dir) {
   });
 }
 
-test('the browser shows the chart from BIC on later visits, with exact pixels', { skip: !chrome && 'set BIC_CHROME to a Chrome executable', timeout: 900000 }, async () => {
-  const outDir = mkdtempSync(join(tmpdir(), 'bic-browser-dist-'));
+async function buildVite(outDir) {
   await build({
     root: join(here, 'vite-app'),
     logLevel: 'silent',
     plugins: [bicVite({ bic: binary })],
     build: { outDir, emptyOutDir: true },
   });
+  return '/';
+}
+
+async function buildWebpack(outDir) {
+  await buildWebpackApp(outDir, binary);
+  return '/index.html';
+}
+
+for (const [name, buildApp] of [['Vite', buildVite], ['webpack', buildWebpack]]) {
+  test(`${name}: the browser shows the chart from BIC on later visits, with exact pixels`, { skip: !chrome && 'set BIC_CHROME to a Chrome executable', timeout: 900000 }, () => scenario(buildApp));
+}
+
+async function scenario(buildApp) {
+  const outDir = mkdtempSync(join(tmpdir(), 'bic-browser-dist-'));
+  const pagePath = await buildApp(outDir);
   const server = await serve(outDir);
   const origin = `http://127.0.0.1:${server.address().port}`;
   const context = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'bic-profile-')), {
@@ -65,7 +80,7 @@ test('the browser shows the chart from BIC on later visits, with exact pixels', 
     await cdp.send('Network.enable');
     const urls = new Map();
     cdp.on('Network.requestWillBeSent', (e) => urls.set(e.requestId, e.request.url));
-    await page.goto(origin + '/', { waitUntil: 'load' });
+    await page.goto(origin + pagePath, { waitUntil: 'load' });
     await page.waitForTimeout(1500);
     const result = await page.evaluate(async () => {
       const chart = document.querySelector('#chart');
@@ -93,22 +108,22 @@ test('the browser shows the chart from BIC on later visits, with exact pixels', 
   try {
     // First visit: the page is not controlled yet, so the PNG is downloaded.
     const first = await visit('visit 1');
-    const firstChart = first.downloaded.find((r) => /chart-.*\.png$/.test(r.name));
+    const firstChart = first.downloaded.find((r) => /chart[-.].*\.png$/.test(r.name));
     assert.ok(firstChart && firstChart.transfer > 0, 'visit 1 downloads the chart PNG');
 
     // Second visit: the worker serves the chart, fetching the .bic from the network.
     const second = await visit('visit 2');
     assert.equal(second.controlled, true, 'the worker controls the page on visit 2');
     assert.equal(second.hash, chartHash, 'chart pixels match the source');
-    assert.ok(!second.downloaded.some((r) => /chart-.*\.png$/.test(r.name) && r.transfer > 0), 'no PNG for the chart on visit 2');
+    assert.ok(!second.downloaded.some((r) => /chart[-.].*\.png$/.test(r.name) && r.transfer > 0), 'no PNG for the chart on visit 2');
 
     // Third visit: the decoded image comes from the cache, so nothing is downloaded for it.
     const third = await visit('visit 3');
     assert.equal(third.hash, chartHash, 'chart pixels still match');
-    assert.ok(!third.downloaded.some((r) => /chart-.*\.(png|bic)$/.test(r.name) && r.transfer > 0), 'no network for the chart on visit 3');
-    assert.ok(third.downloaded.some((r) => /icon-.*\.png$/.test(r.name)), 'the icon, kept as PNG, is still served');
+    assert.ok(!third.downloaded.some((r) => /chart[-.].*\.(png|bic)$/.test(r.name) && r.transfer > 0), 'no network for the chart on visit 3');
+    assert.ok(third.downloaded.some((r) => /icon[-.].*\.png$/.test(r.name)), 'the icon, kept as PNG, is still served');
   } finally {
     await context.close();
     server.close();
   }
-});
+}
