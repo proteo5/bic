@@ -20,7 +20,9 @@
   },
   "files": [
     "src",
-    "bin"
+    "bin",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
@@ -30,9 +32,8 @@
     "test": "node --test test/policy.test.mjs test/install-binary.test.mjs test/build.test.mjs test/vite.test.mjs test/webpack.test.mjs",
     "test:browser": "node --test test/browser.test.mjs"
   },
-  "private": true,
   "dependencies": {
-    "@proteo5/bic-runtime": "file:../bic-runtime",
+    "@proteo5/bic-runtime": "^0.2.1",
     "esbuild": "^0.25.0"
   },
   "devDependencies": {
@@ -40,5 +41,8 @@
     "playwright-core": "^1.50.0",
     "vite": "^7.0.0",
     "webpack": "^5.112.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
