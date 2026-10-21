@@ -38,6 +38,30 @@ jobs:
       - name: Check that the fuzz targets compile
         run: cargo check --manifest-path fuzz/Cargo.toml --bins
 
+  javascript:
+    name: JavaScript packages (runtime and build step)
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install viewer build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the bic binary used by the build step tests
+        run: cargo build --release --locked --bin bic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: packages/bic-runtime
+        working-directory: packages/bic-runtime
+        run: npm ci && npm test
+      - name: packages/bic-build
+        working-directory: packages/bic-build
+        env:
+          BIC_BIN: ${{ github.workspace }}/target/release/bic
+        run: npm ci && npm test
+
   fuzz:
     name: Fuzz (${{ matrix.target }})
     runs-on: ubuntu-latest

@@ -11,3 +11,4 @@ spike/sw-demo/assets/
 packages/bic-runtime/node_modules/
 packages/bic-runtime/isolate*.log
 spike/js-size/node_modules/
+packages/*/node_modules/

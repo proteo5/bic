@@ -1,0 +1,27 @@
+{
+  "name": "@proteo5/bic-build",
+  "version": "0.0.0",
+  "description": "Build step that stores flat graphics (charts, logos, icons) as BIC when that saves bandwidth",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proteo5/bic.git",
+    "directory": "packages/bic-build"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "bic-build": "./bin/bic-build.js"
+  },
+  "files": ["src", "bin"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/policy.test.mjs test/build.test.mjs"
+  },
+  "private": true
+}

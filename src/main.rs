@@ -1,4 +1,5 @@
 mod bench;
+mod inspect;
 mod load;
 mod viewer;
 
@@ -73,6 +74,14 @@ enum Command {
         /// Also write per-image results to this CSV file
         #[arg(long)]
         csv: Option<PathBuf>,
+    },
+    /// Measure an image: sizes of the lossless alternatives and of BIC. Used by
+    /// build tools to decide whether to store an image as BIC.
+    Inspect {
+        input: PathBuf,
+        /// Print JSON for scripts instead of a summary
+        #[arg(long)]
+        json: bool,
     },
     /// Open .bic files with bic-view for the current Windows user
     InstallAssociation,
@@ -243,6 +252,26 @@ fn main() -> Result<()> {
                 ..Default::default()
             };
             bench::run(&inputs, options, csv.as_deref())?
+        }
+        Command::Inspect { input, json } => {
+            let report = inspect::inspect(&input)?;
+            if json {
+                println!("{}", report.to_json());
+            } else {
+                println!(
+                    "{}x{}, {} colors
+PNG {} B, oxipng {} B, WebP lossless {} B
+BIC {} B ({:?})",
+                    report.width,
+                    report.height,
+                    report.distinct_colors,
+                    report.png,
+                    report.oxipng,
+                    report.webp_lossless,
+                    report.bic,
+                    report.bic_storage
+                );
+            }
         }
         Command::InstallAssociation => install_association()?,
     };
