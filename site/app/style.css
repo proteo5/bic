@@ -530,6 +530,10 @@ h3 {
   color: var(--muted);
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .drop-result {
   margin-top: 1.25rem;
   display: grid;

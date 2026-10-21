@@ -233,6 +233,13 @@ HOME = {
         "stats": [("{decoder} KiB", "decoder, gzip, one dependency (fzstd)"),
                   ("{fixtures}", "test cases checked against the Rust decoder"),
                   ("{best}%", "smaller than the best lossless format, best example")],
+        "why_title": "Why BIC: save bandwidth on solid-color images",
+        "why_lead": "Charts, interface screenshots, logos, icons and diagrams are made of large areas of one color. A PNG already compresses them, but BIC stores each run of identical pixels in a few bytes and compresses the result again. A smaller file is less data to download on every visit, and on a slow connection it is the difference between an image that appears at once and one that waits.",
+        "why_points": [
+            "Good fit: flat graphics with few colors. For them BIC can be smaller than optimized PNG (see the results).",
+            "Not a fit: photographs have no long runs of equal pixels. BIC keeps their original JPEG inside the file and adds 32 bytes, so use JPEG or WebP for them.",
+            "Exact: each .bic decodes to the same pixels as its source. The examples below check that byte by byte.",
+        ],
         "live_title": "Live: real .bic files, decoded in your browser",
         "live_lead": "Each file below is decoded right now by @proteo5/bic-runtime from npm, with no server involved. The result is compared with the source pixels, byte for byte.",
         "drop_title": "Try your own .bic file",
@@ -240,7 +247,7 @@ HOME = {
         "drop_choose": "Choose file", "drop_png": "Download as PNG",
         "example_png": "PNG source", "example_bic": ".bic file",
         "results_title": "Results",
-        "results_lead": "Measured on the example images below. Sizes in KiB. \"Best lossless\" is the smallest of PNG, oxipng and WebP lossless. The last three columns are lossy formats, which change pixel values. \"MB saved per 1,000 views\" multiplies the difference by 1,000 transfers. Negative values mean BIC is larger.",
+        "results_lead": "Measured on the example images below. Sizes in KiB. Each row used one of two strategies: the BIC algorithm (flat graphics), or a wrapper that keeps the original JPEG inside the .bic with 32 bytes of header (photographs). \"Best lossless\" is the smallest of PNG, oxipng and WebP lossless. The last three columns are lossy formats, which change pixel values. \"MB saved per 1,000 views\" multiplies the difference by 1,000 transfers. Negative values mean BIC is larger.",
         "th": ["Example", "Pixels", "PNG", "oxipng", "WebP lossless", "BIC file", "Best lossless", "BIC smaller by", "MB saved / 1,000 views", "WebP q80", "AVIF q50", "JPEG q85", "Verdict"],
         "pill_good": "Use BIC", "pill_bad": "Keep the PNG", "pill_jpeg": "Keep the JPEG",
         "verdict_good": "{pct}% smaller than {best}.", "verdict_bad": "{best} is smaller. Keep it.",
@@ -276,8 +283,8 @@ HOME = {
         "by": "by", "unknown": "unknown", "resized": "Resized to fit 1600 px.",
         "footer": "Built from the BIC repository. Decoder used on this site: @proteo5/bic-runtime {runtime}.",
         "footer_source": "Source", "footer_license": "Apache-2.0",
-        "ui": {"themeDark": "Switch to dark theme", "themeLight": "Switch to light theme", "decodedIn": "Decoded in {ms} ms",
-               "storedAs": "Stored as {mime}, shown as is", "identical": "identical to the source",
+        "ui": {"themeDark": "Switch to dark theme", "themeLight": "Switch to light theme", "decodedIn": "BIC algorithm, decoded in {ms} ms",
+               "storedAs": "Wrapper: the original {mime} is kept inside the .bic, not re-encoded", "identical": "identical to the source",
                "mismatch": "does not match the source", "failed": "Could not load", "notBic": "Not a valid .bic file",
                "dropDone": "Decoded. The decoder checks the pixels itself.", "downloadPng": "Download as PNG"},
     },
@@ -297,6 +304,13 @@ HOME = {
         "stats": [("{decoder} KiB", "decodificador, gzip, una sola dependencia (fzstd)"),
                   ("{fixtures}", "casos verificados contra el decodificador de Rust"),
                   ("{best}%", "más pequeño que el mejor formato sin pérdida, mejor caso")],
+        "why_title": "Por qué BIC: ahorrar ancho de banda en imágenes de color sólido",
+        "why_lead": "Las gráficas, capturas de interfaz, logotipos, iconos y diagramas están hechos de grandes áreas de un solo color. Un PNG ya los comprime, pero BIC guarda cada tramo de píxeles idénticos en pocos bytes y después vuelve a comprimir el resultado. Un archivo más pequeño son menos datos que descargar en cada visita, y en una conexión lenta es la diferencia entre una imagen que aparece de inmediato y una que tarda.",
+        "why_points": [
+            "Buen caso: gráficos planos con pocos colores. Para ellos BIC puede ser más pequeño que un PNG optimizado (ver los resultados).",
+            "No es buen caso: las fotografías no tienen tramos largos de píxeles iguales. BIC conserva su JPEG original dentro del archivo y añade 32 bytes, así que para fotos usa JPEG o WebP.",
+            "Exacto: cada .bic se decodifica a los mismos píxeles que su original. Los ejemplos de abajo lo comprueban byte por byte.",
+        ],
         "live_title": "En vivo: archivos .bic reales, decodificados en tu navegador",
         "live_lead": "Cada archivo de abajo lo decodifica ahora @proteo5/bic-runtime desde npm, sin servidor de por medio. El resultado se compara con los píxeles originales, byte por byte.",
         "drop_title": "Prueba tu propio archivo .bic",
@@ -304,7 +318,7 @@ HOME = {
         "drop_choose": "Elegir archivo", "drop_png": "Descargar como PNG",
         "example_png": "PNG original", "example_bic": "archivo .bic",
         "results_title": "Resultados",
-        "results_lead": "Medido en las imágenes de ejemplo. Tamaños en KiB. \"Mejor sin pérdida\" es el más pequeño de PNG, oxipng y WebP sin pérdida. Las últimas tres columnas son formatos con pérdida, que cambian los valores de los píxeles. \"MB ahorrados por cada 1,000 vistas\" multiplica la diferencia por 1,000 transferencias. Los valores negativos significan que BIC es más grande.",
+        "results_lead": "Medido en las imágenes de ejemplo. Tamaños en KiB. Cada fila usó una de dos estrategias: el algoritmo BIC (gráficos planos), o un envoltorio que guarda el JPEG original dentro del .bic con 32 bytes de cabecera (fotografías). \"Mejor sin pérdida\" es el más pequeño de PNG, oxipng y WebP sin pérdida. Las últimas tres columnas son formatos con pérdida, que cambian los valores de los píxeles. \"MB ahorrados por cada 1,000 vistas\" multiplica la diferencia por 1,000 transferencias. Los valores negativos significan que BIC es más grande.",
         "th": ["Ejemplo", "Píxeles", "PNG", "oxipng", "WebP sin pérdida", "Archivo BIC", "Mejor sin pérdida", "BIC más pequeño por", "MB ahorrados / 1,000 vistas", "WebP q80", "AVIF q50", "JPEG q85", "Veredicto"],
         "pill_good": "Usa BIC", "pill_bad": "Mantén el PNG", "pill_jpeg": "Mantén el JPEG",
         "verdict_good": "{pct}% más pequeño que {best}.", "verdict_bad": "{best} es más pequeño. Mantenlo.",
@@ -340,8 +354,8 @@ HOME = {
         "by": "por", "unknown": "desconocido", "resized": "Reducida para caber en 1600 px.",
         "footer": "Sitio construido desde el repositorio de BIC. Decodificador usado en este sitio: @proteo5/bic-runtime {runtime}.",
         "footer_source": "Código fuente", "footer_license": "Apache-2.0",
-        "ui": {"themeDark": "Cambiar al tema oscuro", "themeLight": "Cambiar al tema claro", "decodedIn": "Decodificado en {ms} ms",
-               "storedAs": "Guardado como {mime}, se muestra tal cual", "identical": "idéntico al original",
+        "ui": {"themeDark": "Cambiar al tema oscuro", "themeLight": "Cambiar al tema claro", "decodedIn": "Algoritmo BIC, decodificado en {ms} ms",
+               "storedAs": "Envoltorio: el {mime} original va dentro del .bic, sin recodificar", "identical": "idéntico al original",
                "mismatch": "no coincide con el original", "failed": "No se pudo cargar", "notBic": "No es un archivo .bic válido",
                "dropDone": "Decodificado. El decodificador verifica los píxeles por sí mismo.", "downloadPng": "Descargar como PNG"},
     },
@@ -557,6 +571,14 @@ def render_home(rows, lang, runtime_version, stats):
       </div>
     </div>
     <div class="hero-stats">{stat_html}</div>
+  </div>
+</section>
+
+<section id="why" class="alt">
+  <div class="container">
+    <h2>{t['why_title']}</h2>
+    <p class="section-lead">{t['why_lead']}</p>
+    <ul class="check">{''.join(f'<li>{html.escape(x)}</li>' for x in t['why_points'])}</ul>
   </div>
 </section>
 

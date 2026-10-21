@@ -68,6 +68,8 @@ function drawPixels(width, height, rgba) {
   return canvas;
 }
 
+const FORMAT_NAMES = { 'image/jpeg': 'JPEG', 'image/png': 'PNG', 'image/webp': 'WebP' };
+
 /** Decodes a .bic file and returns what to show, how long it took, and a checksum. */
 async function decodeFile(bytes) {
   const start = performance.now();
@@ -92,7 +94,7 @@ async function decodeFile(bytes) {
     ms,
     view: img,
     hash: await sha256Hex(decoded.bytes),
-    stored: decoded.mime,
+    stored: FORMAT_NAMES[decoded.mime] || decoded.mime,
     width: decoded.width,
     height: decoded.height,
   };
