@@ -240,6 +240,13 @@ HOME = {
             "Not a fit: photographs have no long runs of equal pixels. BIC keeps their original JPEG inside the file and adds 32 bytes, so use JPEG or WebP for them.",
             "Exact: each .bic decodes to the same pixels as its source. The examples below check that byte by byte.",
         ],
+        "export_title": "Export your own image to .bic",
+        "export_lead": "This page decodes .bic files but does not encode them yet, so exporting uses the command line. These commands compare your file the same way as the results table.",
+        "export_cmd": "bic inspect photo.png --json   # sizes of PNG, oxipng, WebP and BIC\nbic encode photo.png photo.bic   # keeps the smaller strategy\nbic verify photo.png photo.bic   # decoded pixels must match exactly",
+        "export_strategy": [
+            "The BIC algorithm: when it is smaller than the source. This is the usual result for charts, interfaces, icons and diagrams.",
+            "A wrapper: when the source file is already smaller (PNG, JPEG, WebP or HEIF), it is kept inside the .bic unchanged. Add --transcode to store the BIC algorithm anyway.",
+        ],
         "live_title": "Live: real .bic files, decoded in your browser",
         "live_lead": "Each file below is decoded right now by @proteo5/bic-runtime from npm, with no server involved. The result is compared with the source pixels, byte for byte.",
         "drop_title": "Try your own .bic file",
@@ -310,6 +317,13 @@ HOME = {
             "Buen caso: gráficos planos con pocos colores. Para ellos BIC puede ser más pequeño que un PNG optimizado (ver los resultados).",
             "No es buen caso: las fotografías no tienen tramos largos de píxeles iguales. BIC conserva su JPEG original dentro del archivo y añade 32 bytes, así que para fotos usa JPEG o WebP.",
             "Exacto: cada .bic se decodifica a los mismos píxeles que su original. Los ejemplos de abajo lo comprueban byte por byte.",
+        ],
+        "export_title": "Exporta tu propia imagen a .bic",
+        "export_lead": "Esta página decodifica archivos .bic, pero todavía no los codifica, así que exportar se hace desde la línea de comandos. Estos comandos comparan tu archivo igual que la tabla de resultados.",
+        "export_cmd": "bic inspect foto.png --json   # tamaños de PNG, oxipng, WebP y BIC\nbic encode foto.png foto.bic   # conserva la estrategia más pequeña\nbic verify foto.png foto.bic   # los píxeles decodificados deben coincidir exactamente",
+        "export_strategy": [
+            "El algoritmo BIC: cuando es más pequeño que el original. Es el resultado habitual en gráficas, interfaces, iconos y diagramas.",
+            "Un envoltorio: cuando el archivo original ya es más pequeño (PNG, JPEG, WebP o HEIF), se guarda dentro del .bic sin cambios. Añade --transcode para guardar el algoritmo BIC de todas formas.",
         ],
         "live_title": "En vivo: archivos .bic reales, decodificados en tu navegador",
         "live_lead": "Cada archivo de abajo lo decodifica ahora @proteo5/bic-runtime desde npm, sin servidor de por medio. El resultado se compara con los píxeles originales, byte por byte.",
@@ -596,6 +610,10 @@ def render_home(rows, lang, runtime_version, stats):
       </label>
     </div>
     <div id="drop-result" class="drop-result card" hidden></div>
+    <h3 style="margin-top:2.5rem">{t['export_title']}</h3>
+    <p class="section-lead">{t['export_lead']}</p>
+    <div class="code"><pre><code>{html.escape(t['export_cmd'])}</code></pre></div>
+    <ul class="check">{''.join(f'<li>{html.escape(x)}</li>' for x in t['export_strategy'])}</ul>
   </div>
 </section>
 
