@@ -1,0 +1,29 @@
+{
+  "name": "@proteo5/bic-runtime",
+  "version": "0.0.0",
+  "description": "Decode BIC images in the browser or Node.js (JavaScript port of the BIC2 decoder)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/proteo5/bic.git",
+    "directory": "packages/bic-runtime"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/conformance.test.mjs"
+  },
+  "dependencies": {
+    "fzstd": "0.1.1"
+  },
+  "private": true,
+  "devDependencies": {
+    "esbuild": "^0.25.12"
+  }
+}

@@ -5,9 +5,9 @@ serves `.bic` images in browsers. Nothing here is published or part of the
 crate. The folders are:
 
 - `wasm-decoder/`: the BIC decoder compiled to WebAssembly, with raw C-ABI exports.
-- `sw-demo/`: a Service Worker that turns `.bic` requests into PNG responses, and two pages that use it.
+- `sw-demo/`: a Service Worker that turns `.bic` requests into PNG responses, and two pages that use it. `sw-src.js` is bundled into `sw.js` with esbuild.
 - `sw-test/`: a headless Chrome test (playwright-core) that measures network bytes and checks pixels.
-- `js-size/`: the size of a pure JavaScript zstd decoder (`fzstd`), for comparison.
+- `js-size/`: removed; its measurement is in the results below.
 
 ## Results (Chrome, headless, 2026-10-21)
 
@@ -22,6 +22,12 @@ crate. The folders are:
 
 zstd-sys (C) does not build for `wasm32-unknown-unknown`, so the browser build
 uses `ruzstd` (pure Rust, decoding only). Encoding is native only.
+
+### JavaScript runtime (now used by the Service Worker)
+
+`packages/bic-runtime` is a port of the decoder to JavaScript. It decodes the
+example images exactly, and the Service Worker uses it in the browser test
+below. Its minified bundle, including zstd, is 12.5 KiB, or 5.7 KiB gzip.
 
 ### Pure JavaScript alternative
 

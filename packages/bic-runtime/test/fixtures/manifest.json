@@ -1,0 +1,483 @@
+[
+ {
+  "id": "chart--lossless",
+  "file": "chart--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 132,
+  "width": 120,
+  "height": 80,
+  "rgba_sha256": "8936946757fd0821d1bf0b8d32e0933488220b652ba435a8556484278df6ee20"
+ },
+ {
+  "id": "chart--fast",
+  "file": "chart--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 132,
+  "width": 120,
+  "height": 80,
+  "rgba_sha256": "8936946757fd0821d1bf0b8d32e0933488220b652ba435a8556484278df6ee20"
+ },
+ {
+  "id": "chart--lossy2",
+  "file": "chart--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 132,
+  "width": 120,
+  "height": 80,
+  "rgba_sha256": "8936946757fd0821d1bf0b8d32e0933488220b652ba435a8556484278df6ee20"
+ },
+ {
+  "id": "chart--lossy5-fast",
+  "file": "chart--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 132,
+  "width": 120,
+  "height": 80,
+  "rgba_sha256": "8936946757fd0821d1bf0b8d32e0933488220b652ba435a8556484278df6ee20"
+ },
+ {
+  "id": "chart--png-fallback",
+  "file": "chart--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 132,
+  "width": 120,
+  "height": 80,
+  "rgba_sha256": "8936946757fd0821d1bf0b8d32e0933488220b652ba435a8556484278df6ee20"
+ },
+ {
+  "id": "gradient--lossless",
+  "file": "gradient--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 164,
+  "width": 96,
+  "height": 64,
+  "rgba_sha256": "2a16ba6c9aa73e65b6839ee3f1c9174f5e566073fc52a87c7913461196c64b0a"
+ },
+ {
+  "id": "gradient--fast",
+  "file": "gradient--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 207,
+  "width": 96,
+  "height": 64,
+  "rgba_sha256": "2a16ba6c9aa73e65b6839ee3f1c9174f5e566073fc52a87c7913461196c64b0a"
+ },
+ {
+  "id": "gradient--lossy2",
+  "file": "gradient--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 164,
+  "width": 96,
+  "height": 64,
+  "rgba_sha256": "2a16ba6c9aa73e65b6839ee3f1c9174f5e566073fc52a87c7913461196c64b0a"
+ },
+ {
+  "id": "gradient--lossy5-fast",
+  "file": "gradient--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 207,
+  "width": 96,
+  "height": 64,
+  "rgba_sha256": "b7a17709d11074e79305915f37f39a3f6afb0a73d69d5475aaadbd3c78b91f5a"
+ },
+ {
+  "id": "gradient--png-fallback",
+  "file": "gradient--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 164,
+  "width": 96,
+  "height": 64,
+  "rgba_sha256": "2a16ba6c9aa73e65b6839ee3f1c9174f5e566073fc52a87c7913461196c64b0a"
+ },
+ {
+  "id": "noise--lossless",
+  "file": "noise--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 9299,
+  "width": 64,
+  "height": 48,
+  "rgba_sha256": "0182f4c16b4affa410c2f2965edcf95267b719118dbcd68229cf6bf0a7eb131a"
+ },
+ {
+  "id": "noise--fast",
+  "file": "noise--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 9299,
+  "width": 64,
+  "height": 48,
+  "rgba_sha256": "0182f4c16b4affa410c2f2965edcf95267b719118dbcd68229cf6bf0a7eb131a"
+ },
+ {
+  "id": "noise--lossy2",
+  "file": "noise--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 6749,
+  "width": 64,
+  "height": 48,
+  "rgba_sha256": "1d78590433b00977119d5033f208a8a50a0c9bf1a74ea8105fddaeab94d0ec37"
+ },
+ {
+  "id": "noise--lossy5-fast",
+  "file": "noise--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 5519,
+  "width": 64,
+  "height": 48,
+  "rgba_sha256": "4aedfc5ccd61bb29da318741e863a7a9a7ed523899263ac670d6fe298f3764f1"
+ },
+ {
+  "id": "noise--png-fallback",
+  "file": "noise--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 9299,
+  "width": 64,
+  "height": 48,
+  "rgba_sha256": "0182f4c16b4affa410c2f2965edcf95267b719118dbcd68229cf6bf0a7eb131a"
+ },
+ {
+  "id": "pixel-art--lossless",
+  "file": "pixel-art--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 458,
+  "width": 32,
+  "height": 24,
+  "rgba_sha256": "0a1061e0dffb0f3b7dda1eef7460f79714835c3eba349d5f3258f45ee9d693c1"
+ },
+ {
+  "id": "pixel-art--fast",
+  "file": "pixel-art--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 458,
+  "width": 32,
+  "height": 24,
+  "rgba_sha256": "0a1061e0dffb0f3b7dda1eef7460f79714835c3eba349d5f3258f45ee9d693c1"
+ },
+ {
+  "id": "pixel-art--lossy2",
+  "file": "pixel-art--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 458,
+  "width": 32,
+  "height": 24,
+  "rgba_sha256": "0a1061e0dffb0f3b7dda1eef7460f79714835c3eba349d5f3258f45ee9d693c1"
+ },
+ {
+  "id": "pixel-art--lossy5-fast",
+  "file": "pixel-art--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 458,
+  "width": 32,
+  "height": 24,
+  "rgba_sha256": "0a1061e0dffb0f3b7dda1eef7460f79714835c3eba349d5f3258f45ee9d693c1"
+ },
+ {
+  "id": "pixel-art--png-fallback",
+  "file": "pixel-art--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 458,
+  "width": 32,
+  "height": 24,
+  "rgba_sha256": "0a1061e0dffb0f3b7dda1eef7460f79714835c3eba349d5f3258f45ee9d693c1"
+ },
+ {
+  "id": "icon-alpha--lossless",
+  "file": "icon-alpha--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 773,
+  "width": 48,
+  "height": 48,
+  "rgba_sha256": "6c65915bc232c24911be9ddf07bfafae7c9d286de2f5c9fae641125f107cf24d"
+ },
+ {
+  "id": "icon-alpha--fast",
+  "file": "icon-alpha--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 773,
+  "width": 48,
+  "height": 48,
+  "rgba_sha256": "6c65915bc232c24911be9ddf07bfafae7c9d286de2f5c9fae641125f107cf24d"
+ },
+ {
+  "id": "icon-alpha--lossy2",
+  "file": "icon-alpha--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 530,
+  "width": 48,
+  "height": 48,
+  "rgba_sha256": "fce8eca74492be7bd3d4e1b36fa8bd33d11740fd8d5ac01e8d57f638429028e1"
+ },
+ {
+  "id": "icon-alpha--lossy5-fast",
+  "file": "icon-alpha--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 422,
+  "width": 48,
+  "height": 48,
+  "rgba_sha256": "bc39533f123c289ab1b164a3eb85e45a2f481f3b50a555f66e750d48f2b7fa8e"
+ },
+ {
+  "id": "icon-alpha--png-fallback",
+  "file": "icon-alpha--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 773,
+  "width": 48,
+  "height": 48,
+  "rgba_sha256": "6c65915bc232c24911be9ddf07bfafae7c9d286de2f5c9fae641125f107cf24d"
+ },
+ {
+  "id": "odd-size--lossless",
+  "file": "odd-size--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 121,
+  "width": 7,
+  "height": 5,
+  "rgba_sha256": "243186697bde63e2cb138a3e09ca52c18fd3fec86da14514fce9f69cd8225107"
+ },
+ {
+  "id": "odd-size--fast",
+  "file": "odd-size--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 121,
+  "width": 7,
+  "height": 5,
+  "rgba_sha256": "243186697bde63e2cb138a3e09ca52c18fd3fec86da14514fce9f69cd8225107"
+ },
+ {
+  "id": "odd-size--lossy2",
+  "file": "odd-size--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 121,
+  "width": 7,
+  "height": 5,
+  "rgba_sha256": "623b8678ff356073befd623969c2d51e9f327bd38c09ba422f92bd92eb613884"
+ },
+ {
+  "id": "odd-size--lossy5-fast",
+  "file": "odd-size--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 121,
+  "width": 7,
+  "height": 5,
+  "rgba_sha256": "8b9386ca3788f3416d5e12124ea1b1e62a9e4a78166fb4dda89abbbbf81cf73d"
+ },
+ {
+  "id": "odd-size--png-fallback",
+  "file": "odd-size--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 121,
+  "width": 7,
+  "height": 5,
+  "rgba_sha256": "243186697bde63e2cb138a3e09ca52c18fd3fec86da14514fce9f69cd8225107"
+ },
+ {
+  "id": "one-pixel--lossless",
+  "file": "one-pixel--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 1,
+  "rgba_sha256": "8080021de01c266864fee7cb8539b39f4844935e2ef393de1f993330f376cba9"
+ },
+ {
+  "id": "one-pixel--fast",
+  "file": "one-pixel--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 1,
+  "rgba_sha256": "8080021de01c266864fee7cb8539b39f4844935e2ef393de1f993330f376cba9"
+ },
+ {
+  "id": "one-pixel--lossy2",
+  "file": "one-pixel--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 1,
+  "rgba_sha256": "8080021de01c266864fee7cb8539b39f4844935e2ef393de1f993330f376cba9"
+ },
+ {
+  "id": "one-pixel--lossy5-fast",
+  "file": "one-pixel--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 1,
+  "rgba_sha256": "8080021de01c266864fee7cb8539b39f4844935e2ef393de1f993330f376cba9"
+ },
+ {
+  "id": "one-pixel--png-fallback",
+  "file": "one-pixel--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 1,
+  "rgba_sha256": "8080021de01c266864fee7cb8539b39f4844935e2ef393de1f993330f376cba9"
+ },
+ {
+  "id": "one-row--lossless",
+  "file": "one-row--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 9,
+  "height": 1,
+  "rgba_sha256": "212651f92744894fa60b999afd01c59cebdab28f8d2128644dd1f5ea54d4d08a"
+ },
+ {
+  "id": "one-row--fast",
+  "file": "one-row--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 9,
+  "height": 1,
+  "rgba_sha256": "212651f92744894fa60b999afd01c59cebdab28f8d2128644dd1f5ea54d4d08a"
+ },
+ {
+  "id": "one-row--lossy2",
+  "file": "one-row--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 9,
+  "height": 1,
+  "rgba_sha256": "212651f92744894fa60b999afd01c59cebdab28f8d2128644dd1f5ea54d4d08a"
+ },
+ {
+  "id": "one-row--lossy5-fast",
+  "file": "one-row--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 9,
+  "height": 1,
+  "rgba_sha256": "212651f92744894fa60b999afd01c59cebdab28f8d2128644dd1f5ea54d4d08a"
+ },
+ {
+  "id": "one-row--png-fallback",
+  "file": "one-row--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 9,
+  "height": 1,
+  "rgba_sha256": "212651f92744894fa60b999afd01c59cebdab28f8d2128644dd1f5ea54d4d08a"
+ },
+ {
+  "id": "one-column--lossless",
+  "file": "one-column--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 9,
+  "rgba_sha256": "9fa2a9b4c31c4fd08a61466e0a3228604f4e0a46520c3e14506f3db86846bdb4"
+ },
+ {
+  "id": "one-column--fast",
+  "file": "one-column--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 9,
+  "rgba_sha256": "9fa2a9b4c31c4fd08a61466e0a3228604f4e0a46520c3e14506f3db86846bdb4"
+ },
+ {
+  "id": "one-column--lossy2",
+  "file": "one-column--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 9,
+  "rgba_sha256": "9fa2a9b4c31c4fd08a61466e0a3228604f4e0a46520c3e14506f3db86846bdb4"
+ },
+ {
+  "id": "one-column--lossy5-fast",
+  "file": "one-column--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 9,
+  "rgba_sha256": "9fa2a9b4c31c4fd08a61466e0a3228604f4e0a46520c3e14506f3db86846bdb4"
+ },
+ {
+  "id": "one-column--png-fallback",
+  "file": "one-column--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 51,
+  "width": 1,
+  "height": 9,
+  "rgba_sha256": "9fa2a9b4c31c4fd08a61466e0a3228604f4e0a46520c3e14506f3db86846bdb4"
+ },
+ {
+  "id": "photo--lossless",
+  "file": "photo--lossless.bic",
+  "kind": "pixels",
+  "bic_bytes": 11099,
+  "width": 160,
+  "height": 100,
+  "rgba_sha256": "8dfe8933aa68e587432ff5826917f7c027de11a2db522a524caade178363a63b"
+ },
+ {
+  "id": "photo--fast",
+  "file": "photo--fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 11153,
+  "width": 160,
+  "height": 100,
+  "rgba_sha256": "8dfe8933aa68e587432ff5826917f7c027de11a2db522a524caade178363a63b"
+ },
+ {
+  "id": "photo--lossy2",
+  "file": "photo--lossy2.bic",
+  "kind": "pixels",
+  "bic_bytes": 11099,
+  "width": 160,
+  "height": 100,
+  "rgba_sha256": "8dfe8933aa68e587432ff5826917f7c027de11a2db522a524caade178363a63b"
+ },
+ {
+  "id": "photo--lossy5-fast",
+  "file": "photo--lossy5-fast.bic",
+  "kind": "pixels",
+  "bic_bytes": 11153,
+  "width": 160,
+  "height": 100,
+  "rgba_sha256": "8dfe8933aa68e587432ff5826917f7c027de11a2db522a524caade178363a63b"
+ },
+ {
+  "id": "photo--png-fallback",
+  "file": "photo--png-fallback.bic",
+  "kind": "pixels",
+  "bic_bytes": 11099,
+  "width": 160,
+  "height": 100,
+  "rgba_sha256": "8dfe8933aa68e587432ff5826917f7c027de11a2db522a524caade178363a63b"
+ },
+ {
+  "id": "photo-jpeg--original",
+  "file": "photo-jpeg--original.bic",
+  "kind": "file",
+  "bic_bytes": 6164,
+  "mime": "image/jpeg",
+  "sha256": "0c16a9d7683648672b7a5578cf6f6ee3112b7a88fb4c0734d1b500a2b8c29d20",
+  "width": 160,
+  "height": 100,
+  "rgba_sha256": "994d0060339ed692ff531004212c32ad208875f1845f6c722c7f3e45e35fb66d"
+ },
+ {
+  "id": "photo-jpeg--transcode",
+  "file": "photo-jpeg--transcode.bic",
+  "kind": "pixels",
+  "bic_bytes": 18736,
+  "width": 160,
+  "height": 100,
+  "rgba_sha256": "994d0060339ed692ff531004212c32ad208875f1845f6c722c7f3e45e35fb66d"
+ },
+ {
+  "id": "gradient--stored-png",
+  "file": "gradient--stored-png.bic",
+  "kind": "file",
+  "bic_bytes": 356,
+  "mime": "image/png",
+  "sha256": null,
+  "width": 96,
+  "height": 64,
+  "rgba_sha256": "2a16ba6c9aa73e65b6839ee3f1c9174f5e566073fc52a87c7913461196c64b0a"
+ }
+]

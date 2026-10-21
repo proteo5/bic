@@ -8,3 +8,6 @@ spike/js-size/node_modules/
 spike/js-size/package-lock.json
 spike/sw-demo/bic.wasm
 spike/sw-demo/assets/
+packages/bic-runtime/node_modules/
+packages/bic-runtime/isolate*.log
+spike/js-size/node_modules/

@@ -1,0 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { decompress } from 'fzstd';
+import { parseContainer, decodeBic } from '../src/index.js';
+const bytes = readFileSync(new URL('../../../site/out/bic/ui-screenshot.bic', import.meta.url));
+const c = parseContainer(bytes);
+const buf = new Uint8Array(c.plainLen);
+let t = performance.now();
+for (let i = 0; i < 20; i++) decompress(c.payload, buf);
+console.log('zstd only: ', ((performance.now() - t) / 20).toFixed(2), 'ms');
+t = performance.now();
+for (let i = 0; i < 20; i++) decodeBic(bytes);
+console.log('full decode:', ((performance.now() - t) / 20).toFixed(2), 'ms');
