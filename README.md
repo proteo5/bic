@@ -1,329 +1,206 @@
-# BIC — image codec for flat graphics
+# BIC
 
+[![CI](https://github.com/proteo5/bic/actions/workflows/ci.yml/badge.svg)](https://github.com/proteo5/bic/actions/workflows/ci.yml)
+[![npm: @proteo5/bic-runtime](https://img.shields.io/npm/v/@proteo5/bic-runtime?label=bic-runtime)](https://www.npmjs.com/package/@proteo5/bic-runtime)
+[![npm: @proteo5/bic-build](https://img.shields.io/npm/v/@proteo5/bic-build?label=bic-build)](https://www.npmjs.com/package/@proteo5/bic-build)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Status: experimental](https://img.shields.io/badge/status-experimental-orange.svg)
-![Rust 2021](https://img.shields.io/badge/rust-2021-informational.svg)
 
-**BIC** is a Rust prototype of a lossless and near-lossless RGBA image codec
-for images with **large solid areas**: screenshots, user interfaces, diagrams,
-charts, icons, logos and pixel art. It combines palettes, simple prediction and
-run-length coding with Zstandard. It ships as a library, a command-line tool
-and a small native viewer.
+**BIC is a lossless image format for flat graphics.** Charts, logos, icons,
+diagrams and pixel art are stored in fewer bytes than optimized PNG in many
+cases. Photographs are kept as their original JPEG, so they neither gain nor lose.
 
-## Where BIC helps, and where it does not
+- **Documentation, live examples and results:** <https://proteo5.github.io/bic/>
+- **Español:** [README.es.md](README.es.md)
 
-| Content | Result | Why |
+The project has three parts:
+
+| Part | What it is | Where |
 | --- | --- | --- |
-| Charts and icons with few colors | **Smaller** than oxipng (bar chart 46 % smaller, icon equal) | Few colors and long runs suit the palette and run-length coding. |
-| Software interfaces, pixel art, flowcharts | **Larger** than oxipng (+12 % to +19 %) | Anti-aliased text has thousands of colors; the palette mode does not apply. Lossy WebP or AVIF are much smaller for interfaces, but they change pixels. |
-| Photographs already in JPEG (the usual case) | **No gain** | A lossless format cannot beat a lossy one. BIC detects this and stores the JPEG unchanged, +32 bytes. |
-| Photographs stored losslessly | **Smaller** than oxipng on 14 test photos (about 16 % by geometric mean) | Not compared with strong photographic codecs such as `cwebp -lossless` or JPEG XL, which are likely as good or better. |
+| `bic` | Command-line tool and viewer for Windows, Linux and macOS | [Releases](https://github.com/proteo5/bic/releases) |
+| `@proteo5/bic-runtime` | Decoder for browsers and Node.js (5.7 KiB gzip, one dependency) | [npm](https://www.npmjs.com/package/@proteo5/bic-runtime) |
+| `@proteo5/bic-build` | Build step and plugins for Vite and webpack, plus the `bic-build` command | [npm](https://www.npmjs.com/package/@proteo5/bic-build) |
 
-These results come from the [demo page](https://proteo5.github.io/bic/), which
-measures every example in the same way. The "about 24 % smaller" figure in
-[BENCHMARKS.md](BENCHMARKS.md) comes from a synthetic corpus and does not describe
-real screenshots.
+> **Status:** experimental. The format may change between versions. Every
+> file is checked to decode to the exact source pixels before it is published.
 
-If most of your images are photographs, BIC is not the right format. Use JPEG,
-WebP, AVIF or JPEG XL. Measurements are in [BENCHMARKS.md](BENCHMARKS.md).
+## When to use BIC
 
-> **Status:** research prototype. The `BIC2` format is not a stable interchange
-> standard and may change between versions. Do not use it for archival storage.
-
-## Contents
-
-- [Where BIC helps, and where it does not](#where-bic-helps-and-where-it-does-not)
-- [Features](#features)
-- [Installation](#installation)
-- [Command-line usage](#command-line-usage)
-- [Library usage](#library-usage)
-- [How it works](#how-it-works)
-- [Safety and decoder limits](#safety-and-decoder-limits)
-- [Benchmarking](#benchmarking)
-- [Limitations](#limitations)
-- [Roadmap](#roadmap)
-- [Development](#development)
-- [License](#license)
-
-## Features
-
-- **Lossless by default**: decoding returns exactly the original pixels.
-- **Near-lossless mode**: `--max-error N` guarantees every decoded sample is
-  within `N` of the original (JPEG-LS-style quantization).
-- **Per-image choice of encoding**: a palette for images with up to 256
-  colors, an optional subtract-green color transform, and prediction that is
-  either fixed (none or up) or chosen per row (none, left, up, average, Paeth,
-  MED). The encoder tries every valid combination and keeps the smallest.
-- **Size first, fast decoding second**: encoding is deliberately exhaustive
-  and slow. Lossless decoding uses vectorizable row loops.
-- **Planar coding**: channels are coded separately; constant channels cost two
-  bytes.
-- **Adaptive block coding**: each plane is split into blocks of 256, 1024 or
-  4096 samples. Each block is stored RAW or with run-length encoding using 4-,
-  8-, 12- or 16-bit counters. The split with the fewest total bytes is chosen
-  by dynamic programming.
-- **Zstandard wrapping** of the whole plane stream, with a configurable level.
-- **Never larger than the original**: when encoding a PNG, JPEG, WebP or HEIF
-  file, BIC keeps the file unchanged inside the container if that is smaller
-  than its own encoding. Lossy JPEGs are usually kept this way, at +32 bytes.
-  `--transcode` turns this off.
-- **PNG fallback**: optionally stores a PNG of the pixels whenever it is
-  smaller than BIC's own encoding.
-- **Wide input support**: PNG, JPEG, WebP, BMP, GIF, TIFF, HEIC and HEIF.
-  EXIF orientation is applied, so phone photos come out upright.
-- **ICC color profiles** are kept: read from the source image, stored in the
-  `.bic` file and written back when decoding to PNG.
-- **Bounded decoding**: memory and pixel limits are checked before anything is
-  allocated.
-- **Desktop viewer and converter**: `bic-view` opens `.bic` files and every
-  supported input format. **File > Open** (Ctrl+O) opens another image, and
-  **File > Save as BIC** (Ctrl+S) saves the current one as `.bic` in the
-  background, losslessly and with its ICC profile, keeping the original file
-  inside when that is smaller. It runs without a console
-  window, opens on double-click through a Windows file association, shows
-  transparency over a checkerboard, and reports errors in a dialog. Images are
-  scaled to the window with smooth resampling (Lanczos3 and Catmull-Rom),
-  keeping proportions and never above 100 %.
-
-## Installation
-
-### Prebuilt programs
-
-[Releases](https://github.com/proteo5/bic/releases) have `bic` and `bic-view`
-for Windows (x64), Linux (x64) and macOS (Apple Silicon and Intel). Unpack the
-archive and keep both programs in the same folder.
-
-The programs are not code-signed. On Windows, SmartScreen may ask for
-confirmation the first time. On macOS, allow them in System Settings > Privacy
-& Security, or run:
-
-```bash
-xattr -d com.apple.quarantine bic bic-view
-```
-
-On Linux, the viewer needs a desktop session (X11 or Wayland) and, for its
-file dialogs, the XDG desktop portal that most desktops provide.
-
-### From source
-
-You need a recent stable [Rust toolchain](https://rustup.rs/).
-
-```bash
-cargo install --git https://github.com/proteo5/bic
-```
-
-Or build from a clone:
-
-```bash
-git clone https://github.com/proteo5/bic
-cd bic
-cargo build --release
-```
-
-This builds two programs in `target/release`: `bic`, the command-line tool,
-and `bic-view`, the viewer (`.exe` on Windows).
-
-## Command-line usage
-
-| Command | Description |
+| Content | BIC against optimized PNG |
 | --- | --- |
-| `bic encode <input> <output.bic>` | Encode an image to BIC |
-| `bic decode <input.bic> <output>` | Decode to a format chosen by the output extension (PNG keeps the ICC profile) |
-| `bic view <file>` | Open a `.bic` or any supported image in the viewer (Esc closes it) |
-| `bic-view [file]` | The same viewer without a console window; without a file it asks for one |
-| `bic verify <original> <file.bic> [--max-error N]` | Check a BIC file against its original: exact, or within `N` |
-| `bic compare <paths>... [--max-error N] [--fast-decode] [--csv out.csv]` | Benchmark BIC against PNG, oxipng, WebP and QOI on files or folders; reports PSNR when `N > 0` |
-| `bic install-association` | Open `.bic` files with `bic-view` for the current Windows user |
+| Bar charts and graphs with solid areas | **Smaller**: 46 % in the bar chart example |
+| Icons and logos with few colors | **Equal or smaller** (icon: 0.2 % smaller) |
+| Software screenshots with anti-aliased text | Larger (+19 %): thousands of colors |
+| Flowcharts and pixel art | Larger (+12 % to +15 %) |
+| Photographs | No gain: the JPEG is kept as it is (+32 bytes) |
 
-### Encode options
+Lossy formats such as WebP and AVIF are often much smaller than any lossless
+format, but they change pixel values. Use them when exact pixels are not needed.
+The method and the full tables are in [BENCHMARKS.md](BENCHMARKS.md) and on the
+[documentation site](https://proteo5.github.io/bic/).
 
-| Option | Default | Effect |
-| --- | --- | --- |
-| `--max-error <N>` | `0` | Largest allowed difference per sample. `0` is lossless. The encoder also tries lossless coding and keeps it when it is smaller. |
-| `--png-fallback` | off | Store a PNG of the pixels instead when it is smaller (lossless encodes only). |
-| `--transcode` | off | Always use BIC's own encoding, even when the original PNG/JPEG/WebP/HEIF file is smaller. |
-| `--fast-decode` | off | Skip per-row prediction. On photographs: about 1 % larger, about 35 % faster to decode. No effect on flat graphics. |
-| `--zstd-level <N>` | `19` | Zstandard compression level (1–22). Higher levels shrink files; decoding speed barely changes. |
+## Quick start
 
-### Examples
+### Decode a .bic file in the browser or Node.js
 
 ```bash
-# Lossless encode and exact check
-bic encode screenshot.png screenshot.bic
-bic verify screenshot.png screenshot.bic
-
-# Near-lossless: no sample differs by more than 2
-bic encode photo.jpg photo.bic --max-error 2
-bic verify photo.jpg photo.bic --max-error 2
-
-# Faster to open, slightly larger
-bic encode photo.jpg photo.bic --fast-decode
-
-# A JPEG is usually kept as is inside the .bic (+32 bytes)
-bic encode photo.jpg photo.bic
-
-# Decode back to PNG
-bic decode screenshot.bic restored.png
+npm install @proteo5/bic-runtime
 ```
 
-### Windows file association
+```js
+import { decodeBic, BicError } from '@proteo5/bic-runtime';
 
-After building, keep `bic` and `bic-view` in the same folder and run once:
-
-```bash
-bic install-association
-```
-
-This writes per-user keys under `HKCU\Software\Classes`, so double-clicking a
-`.bic` file opens it in `bic-view`. No administrator rights are needed, and
-nothing changes until you run the command. If `bic-view` is missing, the
-association falls back to `bic view`, which also opens a console window.
-
-## Library usage
-
-Add the crate from Git:
-
-```toml
-[dependencies]
-bic = { git = "https://github.com/proteo5/bic", default-features = false }
-```
-
-`default-features = false` leaves out the `cli` feature (command-line tool,
-viewer, file dialogs and the BMP, GIF, TIFF and QOI inputs). The codec then
-depends on `anyhow`, `zstd`, `image` (PNG, JPEG, WebP) and `heic-rs`. The
-decoders are needed because a BIC file may embed an original file.
-
-To encode a file rather than raw pixels (keeping the original when it is
-smaller), use `encode_file`. `read_source` decodes PNG, JPEG, WebP and HEIF
-with orientation applied.
-
-```rust
-use bic::{decode_rgba, decode_rgba_with_limits, encode_rgba, DecodeLimits, EncodeOptions};
-
-fn roundtrip(width: u32, height: u32, rgba: &[u8]) -> anyhow::Result<()> {
-    let file = encode_rgba(width, height, rgba, EncodeOptions::default())?;
-
-    // Default limits: 100 M pixels, 512 MiB working memory.
-    let (w, h, pixels) = decode_rgba(&file)?;
-    assert_eq!((w, h, pixels.as_slice()), (width, height, rgba));
-
-    // Stricter limits for untrusted input.
-    let limits = DecodeLimits { max_pixels: 16_000_000, max_alloc: 256 << 20 };
-    decode_rgba_with_limits(&file, limits)?;
-    Ok(())
+const bytes = new Uint8Array(await (await fetch('chart.bic')).arrayBuffer());
+try {
+  const image = decodeBic(bytes);
+  if (image.kind === 'pixels') {
+    // image.width, image.height, image.rgba: 8-bit RGBA, row by row
+  } else {
+    // image.mime and image.bytes: a PNG or an original JPEG/WebP, show as is
+  }
+} catch (error) {
+  if (error instanceof BicError) console.error(error.message);
+  else throw error;
 }
 ```
 
-Input and output are 8-bit RGBA in row-major order (`width × height × 4`
-bytes). Set `EncodeOptions::max_error` for near-lossless encoding. To store
-or read an ICC profile, use `encode_rgba_with_metadata` and
-`decode_with_metadata`.
+### Use the build step in a Vite or webpack project
+
+```bash
+npm install --save-dev @proteo5/bic-build
+```
+
+```js
+// vite.config.js
+import { bicVite } from '@proteo5/bic-build/vite';
+
+export default { plugins: [bicVite()] };
+```
+
+```js
+// webpack.config.mjs (production builds; publicPath must be absolute)
+import { BicWebpackPlugin } from '@proteo5/bic-build/webpack';
+
+export default {
+  mode: 'production',
+  output: { publicPath: '/' },
+  plugins: [new BicWebpackPlugin()],
+};
+```
+
+The build converts an image only when the BIC file is at least 10 % smaller than
+the best lossless format, and never a JPEG or an image with more than 4096
+colors. Your HTML and CSS do not change: a Service Worker answers the original
+image URLs with the converted image. Without the worker, the browser downloads
+the PNG as usual. The reference is in the [documentation](https://proteo5.github.io/bic/docs/).
+
+### Use the command line
+
+Download the release for your system from the [releases page](https://github.com/proteo5/bic/releases),
+or build it from source (see [Development](#development)).
+
+```bash
+bic encode logo.png logo.bic                   # lossless
+bic verify logo.png logo.bic                   # the decoded pixels must match exactly
+bic decode logo.bic logo-copy.png              # back to PNG
+bic inspect logo.png --json                    # sizes of PNG, oxipng, WebP and BIC
+bic encode photo.png photo.bic --max-error 2   # near-lossless: no sample differs by more than 2
+npx bic-build src/images dist/bic              # convert a folder, with bic-manifest.json
+```
+
+Run `bic --help` for every option.
+
+## Results
+
+Measured on the example images of the [documentation site](https://proteo5.github.io/bic/).
+All of them are public-domain or Creative Commons images from Wikimedia Commons.
+Sizes in KiB. The baseline is oxipng, the smallest lossless format for every example.
+
+| Example | Pixels | oxipng | BIC | BIC against oxipng |
+| --- | ---: | ---: | ---: | ---: |
+| Bar chart | 1600×800 | 87.7 | **47.3** | **46 % smaller** |
+| Icon (transparent) | 512×512 | 7.3 | 7.3 | 0.2 % smaller |
+| Software interface | 1600×859 | 114.5 | 136.3 | 19 % larger |
+| Pixel art | 800×480 | 77.2 | 89.0 | 15 % larger |
+| Flowchart | 706×905 | 10.0 | 11.1 | 12 % larger |
+| Photograph (JPEG kept) | 1600×1064 | — | 492.5 | the JPEG plus 32 bytes |
+
+On the synthetic benchmark corpus, the geometric mean of BIC against oxipng is
+0.755 (lower is smaller). On a private set of photographs, lossless coding gives
+0.837. Both sets and the method are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## How it works
 
-```text
-RGBA image
-  ├─ ≤ 256 colors (lossless)  →  palette + one index plane
-  └─ otherwise                →  G, R, B, A planes (R and B relative to G)
-       └─ per plane: constant → 2 bytes, or
-            ├─ prediction (none, up, or a rule per row)
-            ├─ residual quantization (exact when max_error = 0)
-            └─ adaptive blocks: RAW | RLE-4 | RLE-8 | RLE-12 | RLE-16
-  └─ Zstandard
-  └─ BIC2 container (32-byte header)
-```
+- Images with at most 256 colors can be stored as a palette. Otherwise the planes can have green subtracted from red and blue. Each row can use its own predictor (none, left, up, average, Paeth or MED).
+- The planes are coded as run-length blocks and compressed with Zstandard. The encoder tries a small set of these candidates and keeps the smallest result. The choice of candidates is explained in [BENCHMARKS.md](BENCHMARKS.md).
+- Near-lossless mode (`--max-error N`) bounds the error of every sample.
+- A file can embed the original PNG, JPEG, WebP or HEIF. A `.bic` is then never larger than its source plus 32 bytes.
+- The decoders check sizes and lengths before they allocate memory. Malformed input returns an error.
 
-The encoder builds every candidate encoding in parallel and keeps the smallest.
+The byte-level specification is in [FORMAT.md](FORMAT.md).
 
-The full wire format is specified in [FORMAT.md](FORMAT.md).
+## Packages and versions
 
-## Safety and decoder limits
+| Package | Registry | Latest version |
+| --- | --- | --- |
+| `bic` (codec library and CLI) | [crates.io](https://crates.io/crates/bic) | 0.2.0 on crates.io; 0.2.1 in this repository |
+| `bic` binaries and `bic-view` viewer | [GitHub releases](https://github.com/proteo5/bic/releases) | 0.2.1 |
+| `@proteo5/bic-runtime` | [npm](https://www.npmjs.com/package/@proteo5/bic-runtime) | 0.2.1 |
+| `@proteo5/bic-build` | [npm](https://www.npmjs.com/package/@proteo5/bic-build) | 0.2.1 |
 
-Decoding untrusted files is guarded by `DecodeLimits`:
+The build step downloads the `bic` binary for your platform when it is installed
+(Windows x64, Linux x64, macOS Apple Silicon and Intel) and checks it against the
+release checksums. Set `BIC_SKIP_DOWNLOAD=1` to skip the download, or `BIC_BIN`
+to use your own binary.
 
-- Declared dimensions are checked against `max_pixels` before allocation.
-- The decoder's peak memory (about `6 × pixels` plus the decompressed stream)
-  must fit within `max_alloc`.
-- Zstandard output is capped at the length declared in the header, so payloads
-  that inflate beyond it are rejected.
-- Embedded PNG payloads are decoded with the header dimensions as hard limits.
-- Malformed streams, such as out-of-range palette indices or quantizer
-  symbols, return errors instead of panicking.
+## Command-line reference
 
-The decoder is fuzzed in CI (see [Fuzzing](#fuzzing)), but it is still prototype
-code. Do not treat it as a security boundary.
-
-## Benchmarking
-
-```bash
-# Deterministic synthetic corpus of flat graphics plus two controls
-cargo run --release --example gen_corpus -- target/corpus
-
-# Benchmark any mix of files and folders
-bic compare target/corpus ~/Pictures/screenshots --csv results.csv
-```
-
-`compare` encodes each image losslessly and verifies the exact roundtrip. It
-then prints a per-image table and a summary against PNG (image-rs), oxipng,
-WebP lossless and QOI, using both total-size and geometric-mean ratios. If any
-image fails, the command exits with an error.
-
-Results are recorded in [BENCHMARKS.md](BENCHMARKS.md). With BIC2 at the
-default settings, files are on average (geometric mean) about 24 % smaller than
-oxipng on the synthetic flat-graphics corpus. On photographs the gain is small,
-and the comparison does not include strong photographic codecs (see
-[Where BIC helps](#where-bic-helps-and-where-it-does-not)). CI reruns the
-synthetic benchmark on every push.
-
-## Limitations
-
-- 8-bit RGBA only. 16-bit images are reduced to 8 bits on load.
-- One color transform (subtract green).
-- ICC profiles are stored but not applied: the viewer shows raw RGB values.
-- Decoding to formats other than PNG drops the ICC profile, and JPEG output
-  drops transparency.
-- Other EXIF metadata (camera, GPS, dates) is not kept.
-- No animation or progressive decoding.
-- Encoding is slow by design (about a minute for a 20-megapixel photo).
-- Rows that use the left, average, Paeth or MED rules decode sequentially,
-  about half the speed of `none` and `up` rows. `--fast-decode` avoids them.
-- Near-lossless decoding uses a per-sample loop and is slower than lossless.
-- The format version may change without a migration path.
-
-## Roadmap
-
-- [x] Spatial prediction and color decorrelation, chosen by measurement (BIC2)
-- [x] Palette mode for images with up to 256 colors
-- [x] Near-lossless mode with a guaranteed per-sample error bound
-- [x] Keep or drop the RLE stage: measured, kept (plain Zstandard was larger)
-- [x] Faster lossless decoding (vectorizable row loops)
-- [x] Per-row predictor choice (left, average, Paeth, MED)
-- [x] Image corpus and regression benchmarks against PNG, oxipng, WebP lossless and QOI
-- [x] Decoder fuzzing (`cargo-fuzz`) and property-based roundtrip tests
-- [x] Viewer without a console window, with frame-rate limiting
-- [x] EXIF orientation and ICC profile handling
-- [x] Open any supported image in the viewer and save it as BIC
-- [ ] Color-managed display in the viewer
+| Command | What it does |
+| --- | --- |
+| `bic encode <input> <output.bic>` | Encode an image. Options: `--max-error N`, `--png-fallback`, `--fast-decode`, `--transcode`, `--zstd-level N` |
+| `bic decode <input.bic> <output>` | Decode to an image file; the format follows the extension. PNG output keeps the ICC profile |
+| `bic verify <original> <file.bic> [--max-error N]` | Check that the file decodes to the original pixels (or within `N`) |
+| `bic inspect <image> [--json]` | Sizes of PNG, oxipng, WebP lossless and BIC for one image |
+| `bic compare <paths>... [--csv out.csv]` | Benchmark BIC against the other lossless formats, on files or folders |
+| `bic view <file>` | Open a `.bic` or any supported image in the viewer |
+| `bic-view [file]` | The same viewer without a console window |
+| `bic install-association` | Open `.bic` files with the viewer for the current Windows user |
+| `bic-build <input> <output>` | Convert a folder with the build rule. Options: `--min-saving 10`, `--max-colors 4096`, `--bic <path>` |
 
 ## Development
 
+Requirements: a recent stable Rust toolchain for the codec. The JavaScript packages need Node.js 20 or later; CI uses Node.js 22.
+
 ```bash
-cargo test                          # unit and property-based tests
-PROPTEST_CASES=5000 cargo test      # longer property-based run
+cargo test                                       # codec, CLI and property-based tests
 cargo clippy --all-targets -- -D warnings
-cargo fmt
+cargo build --release --bin bic                  # the command-line tool
+
+cd packages/bic-runtime && npm ci && npm test    # decoder, checked against 53 fixtures written by the Rust codec
+cd packages/bic-build && npm ci && npm test      # build step: conversion, verification, binary installer
 ```
+
+The site is built with `python site/build.py` after `npm ci` in `site/`. It needs
+Pillow and a release build of `bic`. The end-to-end browser test runs in Chrome
+when `BIC_CHROME` points to it (see `packages/bic-build/test/browser.test.mjs`).
+
+### Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `src/` | The codec library, the `bic` command-line tool and the `bic-view` viewer |
+| `packages/bic-runtime/` | The JavaScript decoder (`@proteo5/bic-runtime`) and its conformance fixtures |
+| `packages/bic-build/` | The build step and the Vite and webpack plugins (`@proteo5/bic-build`) |
+| `site/` | The documentation and demo site (Python and esbuild) |
+| `fuzz/` | cargo-fuzz targets for the decoder |
+| `spike/` | The browser experiments behind the design: Service Worker and WebAssembly |
+| `examples/` | `gen_corpus` (synthetic benchmark images) and `dump_rgba` (reference pixels for tests) |
 
 ### Fuzzing
 
 The `fuzz/` crate has three [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz)
-targets:
-
-| Target | Input |
-| --- | --- |
-| `decode` | Arbitrary bytes as a whole BIC file |
-| `decode_plain` | Arbitrary bytes as the plane stream, inside a valid container |
-| `roundtrip` | Arbitrary images and encoder options; checks exactness or the lossy error bound |
+targets: `decode` (whole files), `decode_plain` (the plane stream inside a valid
+container) and `roundtrip` (arbitrary images and options). CI fuzzes each one for
+two minutes on every push.
 
 ```bash
 rustup toolchain install nightly
@@ -332,17 +209,23 @@ cd fuzz
 cargo +nightly fuzz run decode_plain -- -max_total_time=300
 ```
 
-On Windows (MSVC), the AddressSanitizer runtime must be on `PATH`, for example
-`VC\Tools\MSVC\<version>\bin\Hostx64\x64` from your Visual Studio
-installation. CI fuzzes each target for two minutes on every push.
+On Windows (MSVC) the AddressSanitizer runtime must be on `PATH`, for example
+`VC\Tools\MSVC\<version>\bin\Hostx64\x64` from your Visual Studio installation.
 
-Issues and pull requests are welcome. Please include tests for codec changes
-and, for compression changes, before/after sizes on representative images.
+## Limits
+
+- The codec works on 8-bit RGBA. Higher bit depths are reduced to 8 bits when they are read.
+- ICC profiles are written to PNG output only. Other output formats drop them and print a note.
+- Service Workers need HTTPS or `localhost`. Chrome is tested end to end; Firefox and Safari are not tested yet.
+- Encoding is slow: the encoder tries several candidates, and a 20-megapixel photo takes about a minute. Decoding flat graphics takes a few milliseconds.
+
+## Contributing
+
+Issues and pull requests are welcome. For codec changes, include tests and, for
+compression changes, before and after sizes on representative images. The
+verification checklist that CI runs is in the workflow files under `.github/workflows/`.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
-
-Unless you explicitly state otherwise, any contribution you intentionally
-submit for inclusion in this work shall be licensed under the Apache License,
-Version 2.0, without any additional terms or conditions.
+Licensed under the [Apache License, Version 2.0](LICENSE). Unless you state
+otherwise, any contribution you submit is licensed under the same terms.

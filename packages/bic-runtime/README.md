@@ -17,3 +17,6 @@ if (decoded.kind === 'pixels') {
 
 Malformed input throws `BicError`. The format is described in `FORMAT.md` in
 the BIC repository: https://github.com/proteo5/bic
+
+Documentation, live examples and the runtime API reference:
+https://proteo5.github.io/bic/docs/ (Español: https://proteo5.github.io/bic/es/docs/)

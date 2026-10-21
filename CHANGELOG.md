@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While the version is 0.x, the file
 format and the API may change between minor versions.
 
+## [Unreleased]
+
+### Changed
+
+- The README is rewritten in English, with a Spanish version in `README.es.md`.
+  It describes the three parts of the project (the command-line tool, the
+  JavaScript runtime and the build step), the measured results and the limits.
+- The documentation site (https://proteo5.github.io/bic/) has English and Spanish
+  pages for the demo, the runtime API, the build plugins, the conversion policy,
+  the command line, the format and troubleshooting. Its numbers are measured
+  during each build, and its live examples decode with the published
+  `@proteo5/bic-runtime`.
+- The package READMEs link to the documentation site.
+
 ## [0.2.1] - 2026-10-21
 
 ### Added

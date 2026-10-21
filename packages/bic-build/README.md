@@ -4,6 +4,9 @@ Stores flat graphics (charts, logos, icons) as BIC when that saves bandwidth,
 and leaves everything else alone. The browser shows them through a Service
 Worker, under their original URLs.
 
+Documentation and a live demo: https://proteo5.github.io/bic/docs/
+(Español: https://proteo5.github.io/bic/es/docs/)
+
 ## Vite
 
 ```js
