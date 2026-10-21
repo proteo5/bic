@@ -1,20 +1,32 @@
-# BIC — experimental planar image codec
+# BIC — image codec for flat graphics
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: experimental](https://img.shields.io/badge/status-experimental-orange.svg)
 ![Rust 2021](https://img.shields.io/badge/rust-2021-informational.svg)
 
-**BIC** is a Rust prototype of a lossless and near-lossless RGBA image codec.
-It combines palettes, simple prediction and run-length coding with Zstandard,
-and on the project's benchmarks it produces smaller files than oxipng for both
-flat graphics and photographs (see [BENCHMARKS.md](BENCHMARKS.md)). It ships
-as a library and a command-line tool with a small native viewer.
+**BIC** is a Rust prototype of a lossless and near-lossless RGBA image codec
+for images with **large solid areas**: screenshots, user interfaces, diagrams,
+charts, icons, logos and pixel art. It combines palettes, simple prediction and
+run-length coding with Zstandard. It ships as a library, a command-line tool
+and a small native viewer.
+
+## Where BIC helps, and where it does not
+
+| Content | Advantage | Why |
+| --- | --- | --- |
+| Screenshots, UI, diagrams, charts, icons, logos, pixel art | **Large** | Long runs of identical pixels and few colors suit its palette and run-length coding. On the synthetic corpus, files are about 24 % smaller than oxipng (geometric mean) and about 70 % smaller than a default PNG. |
+| Photographs already in JPEG (the usual case) | **None** | A lossless format cannot beat a lossy one. BIC detects this and stores the JPEG unchanged, +32 bytes. |
+| Photographs stored losslessly | **Small, unproven** | About 16 % smaller than oxipng on 14 test photos, but not compared with strong photographic codecs such as `cwebp -lossless` or JPEG XL, which are likely as good or better. |
+
+If most of your images are photographs, BIC is not the right format. Use JPEG,
+WebP, AVIF or JPEG XL. Measurements are in [BENCHMARKS.md](BENCHMARKS.md).
 
 > **Status:** research prototype. The `BIC2` format is not a stable interchange
 > standard and may change between versions. Do not use it for archival storage.
 
 ## Contents
 
+- [Where BIC helps, and where it does not](#where-bic-helps-and-where-it-does-not)
 - [Features](#features)
 - [Installation](#installation)
 - [Command-line usage](#command-line-usage)
@@ -68,6 +80,25 @@ as a library and a command-line tool with a small native viewer.
   keeping proportions and never above 100 %.
 
 ## Installation
+
+### Prebuilt programs
+
+[Releases](https://github.com/proteo5/bic/releases) have `bic` and `bic-view`
+for Windows (x64), Linux (x64) and macOS (Apple Silicon and Intel). Unpack the
+archive and keep both programs in the same folder.
+
+The programs are not code-signed. On Windows, SmartScreen may ask for
+confirmation the first time. On macOS, allow them in System Settings > Privacy
+& Security, or run:
+
+```bash
+xattr -d com.apple.quarantine bic bic-view
+```
+
+On Linux, the viewer needs a desktop session (X11 or Wayland) and, for its
+file dialogs, the XDG desktop portal that most desktops provide.
+
+### From source
 
 You need a recent stable [Rust toolchain](https://rustup.rs/).
 
@@ -233,8 +264,10 @@ image fails, the command exits with an error.
 
 Results are recorded in [BENCHMARKS.md](BENCHMARKS.md). With BIC2 at the
 default settings, files are on average (geometric mean) about 24 % smaller than
-oxipng on the synthetic flat-graphics corpus and about 16 % smaller on a set of
-photographs. CI reruns the synthetic benchmark on every push.
+oxipng on the synthetic flat-graphics corpus. On photographs the gain is small,
+and the comparison does not include strong photographic codecs (see
+[Where BIC helps](#where-bic-helps-and-where-it-does-not)). CI reruns the
+synthetic benchmark on every push.
 
 ## Limitations
 

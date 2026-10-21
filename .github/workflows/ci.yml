@@ -30,6 +30,11 @@ jobs:
       - run: cargo test
       - name: Library without the CLI and viewer dependencies
         run: cargo clippy --lib --no-default-features -- -D warnings
+      - name: API documentation builds without warnings
+        if: runner.os == 'Linux'
+        run: cargo doc --no-deps --lib --no-default-features
+        env:
+          RUSTDOCFLAGS: -D warnings
       - name: Check that the fuzz targets compile
         run: cargo check --manifest-path fuzz/Cargo.toml --bins
 

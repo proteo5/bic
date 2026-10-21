@@ -1,15 +1,20 @@
 [package]
 name = "bic"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Experimental planar RGBA image codec prototype"
+description = "Experimental lossless image codec for screenshots, diagrams and other flat graphics; little or no gain on photographs"
 license = "Apache-2.0"
 repository = "https://github.com/proteo5/bic"
 readme = "README.md"
 default-run = "bic"
 keywords = ["image", "codec", "compression", "rle", "zstd"]
 categories = ["multimedia::images", "compression", "command-line-utilities"]
+exclude = ["/fuzz", "/.github", "/tests"]
+
+# docs.rs has no GUI libraries; the API lives in the library alone.
+[package.metadata.docs.rs]
+no-default-features = true
 
 [features]
 default = ["cli"]

@@ -1,3 +1,58 @@
+//! BIC: an experimental lossless and near-lossless image codec for images
+//! with large solid areas, such as screenshots, user interfaces, diagrams,
+//! charts, icons and pixel art. On those it produces smaller files than
+//! optimized PNG. On photographs it offers little or no advantage: a JPEG
+//! source is stored unchanged, and lossless photographs gain little.
+//!
+//! BIC files are optimized for size first and decoding speed second. Each
+//! image is coded with a palette or with a subtract-green transform, then
+//! row prediction, run-length blocks and Zstandard. The encoder tries every
+//! combination and keeps the smallest. When a source file (PNG, JPEG, WebP or
+//! HEIF) is smaller than that, it is stored unchanged. The wire format is
+//! specified in `FORMAT.md` in the repository.
+//!
+//! # Encoding pixels
+//!
+//! ```
+//! use bic::{decode_rgba, encode_rgba, EncodeOptions};
+//!
+//! # fn main() -> anyhow::Result<()> {
+//! // A 2×2 RGBA image.
+//! let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+//! let file = encode_rgba(2, 2, &rgba, EncodeOptions::default())?;
+//! let (width, height, pixels) = decode_rgba(&file)?;
+//! assert_eq!((width, height, pixels.as_slice()), (2, 2, &rgba[..]));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Encoding a file
+//!
+//! `encode_file` reads a PNG, JPEG, WebP or HEIF file (and BMP, GIF, TIFF or
+//! QOI with the `cli` feature), applies its orientation, keeps its ICC
+//! profile, and stores the original unchanged when that is smaller:
+//!
+//! ```no_run
+//! # fn main() -> anyhow::Result<()> {
+//! let original = std::fs::read("photo.jpg")?;
+//! let file = bic::encode_file(&original, bic::EncodeOptions::default())?;
+//! std::fs::write("photo.bic", file)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Untrusted input
+//!
+//! Decoding checks the declared size against [`DecodeLimits`] before
+//! allocating. Use [`decode_rgba_with_limits`] or [`decode_with_metadata`]
+//! with tighter limits for files from untrusted sources.
+//!
+//! # Features
+//!
+//! * `cli` (default): the `bic` and `bic-view` programs and their
+//!   dependencies. Library users can disable it with
+//!   `default-features = false`.
+#![warn(missing_docs)]
 use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 
@@ -27,6 +82,7 @@ const CHANNEL_CODED: u8 = 1;
 /// Resource caps applied before the decoder allocates anything.
 #[derive(Clone, Copy, Debug)]
 pub struct DecodeLimits {
+    /// Largest accepted `width × height`.
     pub max_pixels: usize,
     /// Upper bound on the decoder's peak working memory, in bytes.
     pub max_alloc: usize,
@@ -42,6 +98,7 @@ impl Default for DecodeLimits {
     }
 }
 
+/// Encoder settings. The defaults give the smallest lossless file.
 #[derive(Clone, Copy, Debug)]
 pub struct EncodeOptions {
     /// Largest allowed difference between an original and a decoded sample.
@@ -58,6 +115,8 @@ pub struct EncodeOptions {
     /// larger than the original plus the 32-byte header. Lossy originals such
     /// as JPEG are usually kept this way.
     pub keep_original: bool,
+    /// Zstandard level, 1–22 (default 19). Higher levels make smaller files
+    /// and slower encoding; decoding speed barely changes.
     pub zstd_level: i32,
 }
 
@@ -162,10 +221,13 @@ pub struct Metadata {
 /// A decoded image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Decoded {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
     /// 8-bit RGBA in row-major order.
     pub rgba: Vec<u8>,
+    /// Metadata stored with the image.
     pub metadata: Metadata,
 }
 
@@ -213,6 +275,7 @@ pub fn encode_source(source: &Source, original: &[u8], options: EncodeOptions) -
     Ok(native)
 }
 
+/// Encodes 8-bit RGBA pixels (row-major, `width × height × 4` bytes).
 pub fn encode_rgba(
     width: u32,
     height: u32,
@@ -222,6 +285,7 @@ pub fn encode_rgba(
     encode_rgba_with_metadata(width, height, rgba, &Metadata::default(), options)
 }
 
+/// Like [`encode_rgba`], also storing `metadata` (such as an ICC profile).
 pub fn encode_rgba_with_metadata(
     width: u32,
     height: u32,
@@ -355,10 +419,13 @@ fn build_palette(rgba: &[u8]) -> Option<Palette> {
     })
 }
 
+/// Decodes a BIC file to `(width, height, rgba)` with the default limits.
 pub fn decode_rgba(file: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     decode_rgba_with_limits(file, DecodeLimits::default())
 }
 
+/// Decodes a BIC file to `(width, height, rgba)`, refusing files that exceed
+/// `limits` before allocating.
 pub fn decode_rgba_with_limits(file: &[u8], limits: DecodeLimits) -> Result<(u32, u32, Vec<u8>)> {
     let d = decode_with_metadata(file, limits)?;
     Ok((d.width, d.height, d.rgba))

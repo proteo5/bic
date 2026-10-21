@@ -12,19 +12,26 @@ use std::io::Cursor;
 /// Formats a BIC file may store unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmbeddableFormat {
+    /// Portable Network Graphics.
     Png,
+    /// JPEG (JFIF or EXIF).
     Jpeg,
+    /// WebP, lossy or lossless.
     WebP,
+    /// HEIF, including HEIC.
     Heif,
 }
 
 /// A decoded source image.
 #[derive(Clone, Debug)]
 pub struct Source {
+    /// Width in pixels, after orientation.
     pub width: u32,
+    /// Height in pixels, after orientation.
     pub height: u32,
     /// Upright (EXIF/HEIF orientation applied) 8-bit RGBA, row-major.
     pub rgba: Vec<u8>,
+    /// Metadata read from the file, such as its ICC profile.
     pub metadata: Metadata,
     /// Set when the file could be stored unchanged in a BIC file.
     pub embeddable: Option<EmbeddableFormat>,
