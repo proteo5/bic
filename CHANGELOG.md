@@ -54,7 +54,7 @@ JPEG sources are stored unchanged.
 
 ### Changed
 
-- On the project's benchmarks (geometric mean against oxipng), flat graphics
+- On the synthetic benchmark corpus (geometric mean against oxipng), flat graphics
   went from 1.316 to 0.755. Lossless photographs went from 1.849 to 0.837, but
   that comparison excludes strong photographic codecs.
 - Lossless decoding processes whole rows with vectorizable loops.

@@ -12,11 +12,17 @@ and a small native viewer.
 
 ## Where BIC helps, and where it does not
 
-| Content | Advantage | Why |
+| Content | Result | Why |
 | --- | --- | --- |
-| Screenshots, UI, diagrams, charts, icons, logos, pixel art | **Large** | Long runs of identical pixels and few colors suit its palette and run-length coding. On the synthetic corpus, files are about 24 % smaller than oxipng (geometric mean) and about 70 % smaller than a default PNG. |
-| Photographs already in JPEG (the usual case) | **None** | A lossless format cannot beat a lossy one. BIC detects this and stores the JPEG unchanged, +32 bytes. |
-| Photographs stored losslessly | **Small, unproven** | About 16 % smaller than oxipng on 14 test photos, but not compared with strong photographic codecs such as `cwebp -lossless` or JPEG XL, which are likely as good or better. |
+| Charts and icons with few colors | **Smaller** than oxipng (bar chart 46 % smaller, icon equal) | Few colors and long runs suit the palette and run-length coding. |
+| Software interfaces, pixel art, flowcharts | **Larger** than oxipng (+12 % to +19 %) | Anti-aliased text has thousands of colors; the palette mode does not apply. Lossy WebP or AVIF are much smaller for interfaces, but they change pixels. |
+| Photographs already in JPEG (the usual case) | **No gain** | A lossless format cannot beat a lossy one. BIC detects this and stores the JPEG unchanged, +32 bytes. |
+| Photographs stored losslessly | **Smaller** than oxipng on 14 test photos (about 16 % by geometric mean) | Not compared with strong photographic codecs such as `cwebp -lossless` or JPEG XL, which are likely as good or better. |
+
+These results come from the [demo page](https://proteo5.github.io/bic/), which
+measures every example in the same way. The "about 24 % smaller" figure in
+[BENCHMARKS.md](BENCHMARKS.md) comes from a synthetic corpus and does not describe
+real screenshots.
 
 If most of your images are photographs, BIC is not the right format. Use JPEG,
 WebP, AVIF or JPEG XL. Measurements are in [BENCHMARKS.md](BENCHMARKS.md).
